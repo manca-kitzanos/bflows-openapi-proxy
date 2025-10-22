@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: bflows-postgres
+    environment:
+      POSTGRES_USER: ${DB_ROOT_USER}
+      POSTGRES_PASSWORD: ${DB_ROOT_PASSWORD}
+    ports:
+      - "5435:5432"  # Expose on port 5435 as requested
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      public:
+        ipv4_address: 172.25.0.101
+
+  app:
+    build: .
+    container_name: bflows-openapi-proxy
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=172.25.0.101  # Use fixed IP of postgres container
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_SCHEMA=${DB_SCHEMA}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_ROOT_USER=${DB_ROOT_USER}
+      - DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - OPENAPI_BASE_URL_RISK=${OPENAPI_BASE_URL_RISK}
+      - OPENAPI_TOKEN_RISK=${OPENAPI_TOKEN_RISK}
+      - TIMEZONE=${TIMEZONE}
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@172.25.0.101:${DB_PORT}/${DB_NAME}?options=-csearch_path%3D${DB_SCHEMA}
+    restart: always
+    networks:
+      public:
+        ipv4_address: 172.25.0.102
+
+volumes:
+  postgres_data:
+
+networks:
+  public:
+    external: true
