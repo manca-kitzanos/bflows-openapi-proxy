@@ -530,14 +530,46 @@ async def negative_event_callback(
         body_text = raw_body.decode('utf-8', errors='replace')
         print(f"Body as text: {body_text}")
         if body_text and not callback_data:
+            # Handle the special case from OpenAPI - data parameter with URL-encoded JSON
+            if body_text.startswith('data='):
+                try:
+                    from urllib.parse import unquote
+                    # URL-decode the data parameter
+                    json_str = unquote(body_text[5:])  # Remove 'data=' and unquote
+                    print(f"URL-decoded JSON string: {json_str}")
+                    # Parse the JSON
+                    parsed_json = json.loads(json_str)
+                    print(f"Successfully parsed URL-encoded JSON: {parsed_json}")
+                    callback_data.update(parsed_json)
+                    
+                    # If the data is nested inside a 'data' key, extract it
+                    if 'data' in parsed_json and isinstance(parsed_json['data'], dict):
+                        # Add the nested data with prefixed keys for easy access
+                        for key, value in parsed_json['data'].items():
+                            callback_data[f"data_{key}"] = value
+                        print(f"Extracted nested data from 'data' field")
+                except Exception as e:
+                    print(f"Failed to parse URL-encoded JSON: {str(e)}")
             # If it looks like a form but wasn't parsed
-            if '=' in body_text and '&' in body_text:
+            elif '=' in body_text and '&' in body_text:
                 try:
                     from urllib.parse import parse_qs
                     form_data = parse_qs(body_text)
                     text_dict = {k: v[0] if len(v) == 1 else v for k, v in form_data.items()}
                     print(f"Parsed as form string: {text_dict}")
                     callback_data.update(text_dict)
+                    
+                    # If there's a 'data' parameter containing JSON
+                    if 'data' in text_dict:
+                        try:
+                            data_json = json.loads(text_dict['data'])
+                            print(f"Parsed 'data' parameter as JSON: {data_json}")
+                            callback_data['data_parsed'] = data_json
+                            # Also add top-level keys for easy access
+                            for key, value in data_json.items():
+                                callback_data[f"data_{key}"] = value
+                        except Exception as e:
+                            print(f"Failed to parse 'data' parameter as JSON: {str(e)}")
                 except Exception as e:
                     print(f"Failed to parse as form string: {str(e)}")
             elif body_text.strip().startswith('{') and body_text.strip().endswith('}'):
@@ -580,7 +612,7 @@ async def negative_event_callback(
         status = None
         
         # Try all possible keys for external_id
-        for id_key in ['id', 'external_id', 'request_id', 'data.id']:
+        for id_key in ['id', 'external_id', 'request_id', 'data.id', 'data_id']:
             if id_key in callback_data:
                 external_id = callback_data[id_key]
                 print(f"Found external_id in field {id_key}: {external_id}")
@@ -601,7 +633,7 @@ async def negative_event_callback(
                 break
         
         # Try all possible keys for status
-        for status_key in ['status', 'state', 'result', 'data.status']:
+        for status_key in ['status', 'state', 'result', 'data.status', 'data_status']:
             if status_key in callback_data:
                 status = callback_data[status_key]
                 print(f"Found status in field {status_key}: {status}")
