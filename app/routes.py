@@ -1081,15 +1081,50 @@ async def company_full_callback(
             response_data["warning"] = "Missing external ID in callback data"
             return response_data
         
-        # Find the corresponding record in the database
-        # Try matching by external_id first
-        db_record = db.query(models.CompanyFullData).filter(
-            models.CompanyFullData.external_id == external_id,
-            models.CompanyFullData.status == "PENDING",
-            models.CompanyFullData.version_status == "ACTIVE"
-        ).order_by(models.CompanyFullData.created_at.desc()).first()
+        # Extract vatCode or taxCode from the callback data
+        vat_code = None
+        tax_code = None
+        try:
+            if 'data' in callback_data and 'companyDetails' in callback_data['data']:
+                company_details = callback_data['data']['companyDetails']
+                vat_code = company_details.get('vatCode')
+                tax_code = company_details.get('taxCode')
+                print(f"Extracted vatCode: {vat_code}, taxCode: {tax_code}")
+                
+                # These can be used to find the corresponding record
+                if vat_code or tax_code:
+                    external_id = vat_code or tax_code
+                    print(f"Using vatCode/taxCode as external_id: {external_id}")
+        except Exception as e:
+            print(f"Error extracting vatCode/taxCode: {str(e)}")
         
-        # If not found by external_id, try by session_id (look in request_json.callback.headers.session_id)
+        # Find the corresponding record in the database
+        # First, try by vatCode or taxCode (these should match the identifier used in the request)
+        db_record = None
+        identifier_to_match = vat_code or tax_code
+        
+        if identifier_to_match:
+            db_record = db.query(models.CompanyFullData).filter(
+                models.CompanyFullData.identifier == identifier_to_match,
+                models.CompanyFullData.status == "PENDING",
+                models.CompanyFullData.version_status == "ACTIVE"
+            ).order_by(models.CompanyFullData.created_at.desc()).first()
+            
+            if db_record:
+                print(f"Found record by identifier match: {identifier_to_match}")
+        
+        # If not found by identifier, try by external_id 
+        if not db_record and external_id:
+            db_record = db.query(models.CompanyFullData).filter(
+                models.CompanyFullData.external_id == external_id,
+                models.CompanyFullData.status == "PENDING",
+                models.CompanyFullData.version_status == "ACTIVE"
+            ).order_by(models.CompanyFullData.created_at.desc()).first()
+            
+            if db_record:
+                print(f"Found record by external_id: {external_id}")
+        
+        # If still not found, try by session_id
         if not db_record and session_id:
             all_pending = db.query(models.CompanyFullData).filter(
                 models.CompanyFullData.status == "PENDING",
