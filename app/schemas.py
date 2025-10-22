@@ -15,6 +15,31 @@ class CreditScoreResponse(BaseModel):
     class Config:
         from_attributes = True
 
+# Company Full Data Schemas
+class CompanyFullDataResponse(BaseModel):
+    id: int
+    identifier: str
+    external_id: Optional[str] = None
+    status: str
+    version_status: str
+    request_json: Dict[str, Any]
+    response_json: Dict[str, Any]
+    callback_json: Optional[Dict[str, Any]] = None
+    status_code: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class CallbackConfigCompany(BaseModel):
+    url: str
+    method: str = "JSON"
+    headers: Optional[Dict[str, str]] = None
+
+class CompanyFullDataCreateRequest(BaseModel):
+    callback: CallbackConfigCompany
+
 # Negative Events Schemas
 class CallbackConfig(BaseModel):
     url: str

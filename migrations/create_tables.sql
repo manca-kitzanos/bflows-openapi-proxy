@@ -54,7 +54,29 @@ CREATE TABLE IF NOT EXISTS negativa_details (
 -- Add indexes for negativa_details
 CREATE INDEX IF NOT EXISTS idx_negativa_details_request_id ON negativa_details(request_id);
 
+-- Create company_full_data table
+CREATE TABLE IF NOT EXISTS company_full_data (
+    id SERIAL PRIMARY KEY,
+    identifier VARCHAR(255) NOT NULL,
+    external_id VARCHAR(255),
+    status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+    version_status VARCHAR(20) DEFAULT 'ACTIVE' NOT NULL,
+    request_json JSONB,
+    response_json JSONB,
+    callback_json JSONB,
+    status_code INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE
+);
+
+-- Add indexes for company_full_data
+CREATE INDEX IF NOT EXISTS idx_company_full_data_identifier ON company_full_data(identifier);
+CREATE INDEX IF NOT EXISTS idx_company_full_data_external_id ON company_full_data(external_id);
+CREATE INDEX IF NOT EXISTS idx_company_full_data_status ON company_full_data(status);
+CREATE INDEX IF NOT EXISTS idx_company_full_data_version_status ON company_full_data(version_status);
+
 -- Grant permissions
 ALTER TABLE credit_score_responses OWNER TO openapi_user;
 ALTER TABLE negativa_requests OWNER TO openapi_user;
 ALTER TABLE negativa_details OWNER TO openapi_user;
+ALTER TABLE company_full_data OWNER TO openapi_user;

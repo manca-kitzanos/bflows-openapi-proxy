@@ -12,12 +12,18 @@ router = APIRouter(
     tags=["OpenAPI Proxy"]
 )
 
+# Load environment variables
 OPENAPI_BASE_URL_RISK = os.getenv("OPENAPI_BASE_URL_RISK")
 OPENAPI_TOKEN_RISK = os.getenv("OPENAPI_TOKEN_RISK")
+OPENAPI_BASE_URL_COMPANY = os.getenv("OPENAPI_BASE_URL_COMPANY")
+OPENAPI_TOKEN_COMPANY = os.getenv("OPENAPI_TOKEN_COMPANY")
 
 # Headers with Bearer token authentication
-def get_auth_headers():
+def get_auth_headers_risk():
     return {"Authorization": f"Bearer {OPENAPI_TOKEN_RISK}"}
+
+def get_auth_headers_company():
+    return {"Authorization": f"Bearer {OPENAPI_TOKEN_COMPANY}"}
 
 @router.get("/credit-score/{identifier}", response_model=schemas.CreditScoreResponse)
 async def get_credit_score(
@@ -107,7 +113,7 @@ async def get_credit_score(
             async with httpx.AsyncClient() as client:
                 try:
                     # Prepare headers
-                    headers = get_auth_headers()
+                    headers = get_auth_headers_risk()
                     headers["accept"] = "application/json"
                     
                     # Log the URL and headers for debugging (omitting the auth token for security)
@@ -184,6 +190,230 @@ async def get_credit_score(
     db.commit()
     db.refresh(new_record)
     return new_record
+
+@router.get("/company-full/{identifier}", response_model=schemas.CompanyFullDataResponse)
+async def get_company_full_data(
+    identifier: str = Path(..., description="VAT code or tax code of the company to fetch full data for"),
+    update: bool = Query(
+        False, 
+        description="When true, forces a fetch from OpenAPI and creates a new record; when false (default), returns existing record or creates a new request"
+    ),
+    db: Session = Depends(database.get_db),
+    request: Request = None
+):
+    """
+    Fetch or update full company data from the OpenAPI source.
+    
+    ## Description
+    This endpoint provides comprehensive company information including over 400 financial details.
+    
+    ## Behavior
+    - If `update=false` (default):
+      - If an ACTIVE completed record exists: Returns the existing record from the database
+      - If a PENDING record exists: Returns the pending record (data is being fetched asynchronously)
+      - If no record exists: Creates a new request to OpenAPI and returns PENDING status
+    
+    - If `update=true`:
+      - All ACTIVE records for this identifier are marked as NOT ACTIVE
+      - Creates a new request to OpenAPI and returns PENDING status
+    
+    ## Response
+    Returns a CompanyFullDataResponse object with:
+    - Company identifier (VAT or tax code)
+    - Request and response data in JSON format
+    - Status of the request (PENDING, COMPLETED, ERROR)
+    - Record status (ACTIVE/NOT ACTIVE for versioning)
+    - Timestamps for creation and updates
+    
+    ## Example Usage
+    - Get cached data: `GET /company-full/ABC123`
+    - Force refresh: `GET /company-full/ABC123?update=true`
+    
+    ## Note
+    This is an asynchronous endpoint. The first call will initiate the data retrieval process,
+    and you may need to poll the endpoint until the status changes from PENDING to COMPLETED.
+    """
+    # Generate a random session ID for this request
+    import uuid
+    import random
+    import string
+    
+    # Either create a UUID or a random string
+    session_id = f"bflows_{uuid.uuid4().hex[:16]}"
+    
+    # Get the base URL for callback
+    base_url = str(request.base_url).rstrip('/')
+    callback_url = f"{base_url}/webhook/company-full"
+    
+    # First, check for an existing ACTIVE and COMPLETED record
+    if not update:
+        existing_record = db.query(models.CompanyFullData).filter(
+            models.CompanyFullData.identifier == identifier,
+            models.CompanyFullData.status == "COMPLETED",
+            models.CompanyFullData.version_status == "ACTIVE"
+        ).order_by(models.CompanyFullData.created_at.desc()).first()
+        
+        # If we have a completed record, return it
+        if existing_record:
+            return existing_record
+    
+    # Next, check for PENDING requests (unless update=true)
+    if not update:
+        pending_record = db.query(models.CompanyFullData).filter(
+            models.CompanyFullData.identifier == identifier,
+            models.CompanyFullData.status == "PENDING",
+            models.CompanyFullData.version_status == "ACTIVE"
+        ).order_by(models.CompanyFullData.created_at.desc()).first()
+        
+        # If we have a pending record, return it
+        if pending_record:
+            return pending_record
+    
+    # If we get here, we need to create a new request
+    
+    # If update is true, we need to mark existing active records as inactive
+    if update:
+        existing_records = db.query(models.CompanyFullData).filter(
+            models.CompanyFullData.identifier == identifier,
+            models.CompanyFullData.version_status == "ACTIVE"
+        ).all()
+        
+        for record in existing_records:
+            record.version_status = "NOT ACTIVE"
+            db.add(record)
+        
+        db.commit()
+    
+    # Create a new request to OpenAPI
+    url = f"{OPENAPI_BASE_URL_COMPANY}/IT-full/{identifier}"
+    
+    # Create the callback configuration
+    callback_config = {
+        "url": callback_url,
+        "method": "JSON",  # As specified in the requirements
+        "headers": {
+            "session_id": session_id
+        }
+    }
+    
+    # Prepare the payload for OpenAPI
+    payload = {
+        "callback": callback_config
+    }
+    
+    # Log the request details
+    print("=" * 40)
+    print(f"Making POST request to OpenAPI company endpoint: {url}")
+    print(f"Payload for OpenAPI:")
+    print(json.dumps(payload, indent=2))
+    print("=" * 40)
+    
+    status_code = 500
+    response_json = {}
+    
+    try:
+        # Make the request to OpenAPI
+        async with httpx.AsyncClient() as client:
+            headers = get_auth_headers_company()
+            headers["accept"] = "application/json"
+            headers["Content-Type"] = "application/json"
+            
+            # Log headers without exposing token
+            headers_log = headers.copy()
+            if "Authorization" in headers_log:
+                headers_log["Authorization"] = "Bearer [REDACTED]"
+            print(f"Request headers: {headers_log}")
+            
+            # Make the POST request to OpenAPI
+            resp = await client.post(url, json=payload, headers=headers)
+            status_code = resp.status_code
+            
+            # Log the response
+            print(f"OpenAPI response status code: {status_code}")
+            print(f"OpenAPI response headers: {dict(resp.headers)}")
+            
+            try:
+                response_text = resp.text
+                print(f"OpenAPI response text: {response_text[:500]}")  # Print only first 500 chars
+                response_json = resp.json()
+                print(f"OpenAPI response JSON: {json.dumps(response_json, indent=2)}")
+            except Exception as e:
+                print(f"Failed to parse response as JSON: {str(e)}")
+                response_json = {"error": "Invalid JSON response"}
+            
+            resp.raise_for_status()
+            
+            # Extract external ID from the response (if available)
+            external_id = response_json.get('data', {}).get('id', None)
+            
+            # Create the database record
+            db_record = models.CompanyFullData(
+                identifier=identifier,
+                external_id=external_id,
+                status="PENDING",
+                version_status="ACTIVE",
+                request_json=payload,
+                response_json=response_json,
+                status_code=status_code
+            )
+            
+            db.add(db_record)
+            db.commit()
+            db.refresh(db_record)
+            
+            # Return the new record
+            return db_record
+    
+    except httpx.HTTPError as e:
+        # Handle HTTP errors from the API
+        status_code = getattr(e, "response", httpx.Response(status_code=500)).status_code
+        response_json = {"error": f"Connection error: {str(e)}"}
+        error_detail = f"OpenAPI request failed: {str(e)}"
+        
+        try:
+            if hasattr(e, "response") and e.response:
+                error_json = e.response.json()
+                if error_json.get('message'):
+                    error_detail = error_json.get('message')
+                    response_json = error_json
+        except:
+            pass
+        
+        # Create error record in the database
+        db_record = models.CompanyFullData(
+            identifier=identifier,
+            status="ERROR",
+            version_status="ACTIVE",
+            request_json=payload,
+            response_json=response_json,
+            status_code=status_code
+        )
+        
+        db.add(db_record)
+        db.commit()
+        db.refresh(db_record)
+        
+        raise HTTPException(status_code=status_code, detail=error_detail)
+    
+    except Exception as e:
+        # Handle any other exceptions
+        response_json = {"error": str(e)}
+        
+        # Create error record in the database
+        db_record = models.CompanyFullData(
+            identifier=identifier,
+            status="ERROR",
+            version_status="ACTIVE",
+            request_json=payload,
+            response_json=response_json,
+            status_code=500
+        )
+        
+        db.add(db_record)
+        db.commit()
+        db.refresh(db_record)
+        
+        raise HTTPException(status_code=500, detail=f"Failed to create company data request: {str(e)}")
 
 @router.get("/negative-event", response_model=schemas.NegativaFullResponse)
 async def get_negative_event(
@@ -311,7 +541,7 @@ async def get_negative_event(
     try:
         # Make the request to OpenAPI
         async with httpx.AsyncClient() as client:
-            headers = get_auth_headers()
+            headers = get_auth_headers_risk()
             headers["accept"] = "application/json"
             headers["Content-Type"] = "application/json"
             
@@ -403,7 +633,7 @@ async def fetch_negative_detail(request_id: int, external_id: str, db: Session):
     print(f"Making GET request to OpenAPI details endpoint: {url}")
     
     try:
-        headers = get_auth_headers()
+        headers = get_auth_headers_risk()
         headers["accept"] = "application/json"
         
         # Log headers without exposing token
@@ -482,7 +712,7 @@ async def fetch_negative_detail(request_id: int, external_id: str, db: Session):
     
     print("=== BACKGROUND TASK: fetch_negative_detail completed ===")
 
-# This route will NOT be shown in Swagger docs
+# This route will NOT be shown in Swagger docs - Callback for negative events
 @router.post("/webhook/negative-event", include_in_schema=False, status_code=200)
 async def negative_event_callback(
     background_tasks: BackgroundTasks,
@@ -493,120 +723,118 @@ async def negative_event_callback(
     Webhook endpoint to receive callbacks from OpenAPI after a negative event check is complete.
     This endpoint is not exposed in the public API documentation.
     """
-    # Log webhook call details
-    print("=" * 60)
-    print(f"WEBHOOK CALLED: /webhook/negative-event at {request.url}")
-    print(f"Client IP: {request.client.host if request.client else 'Unknown'}")
-    print(f"Request headers: {dict(request.headers)}")
-    print(f"Raw body: {await request.body()}")
-    
-    # Get raw request data
-    raw_body = await request.body()
-    print(f"Raw body (bytes): {raw_body}")
-    
-    # Try all possible ways to extract data from the request
-    callback_data = {}
-    
-    # 1. Try to parse as JSON
-    try:
-        body_json = await request.json()
-        print(f"Successfully parsed as JSON: {json.dumps(body_json, indent=2)}")
-        callback_data.update(body_json)
-    except Exception as e:
-        print(f"Not valid JSON: {str(e)}")
-    
-    # 2. Try to parse as form data
-    try:
-        body_form = await request.form()
-        if body_form:
-            form_dict = dict(body_form)
-            print(f"Successfully parsed as form: {form_dict}")
-            callback_data.update(form_dict)
-    except Exception as e:
-        print(f"Not valid form data: {str(e)}")
-    
-    # 3. Try to parse as plain text
-    try:
-        body_text = raw_body.decode('utf-8', errors='replace')
-        print(f"Body as text: {body_text}")
-        if body_text and not callback_data:
-            # Handle the special case from OpenAPI - data parameter with URL-encoded JSON
-            if body_text.startswith('data='):
-                try:
-                    from urllib.parse import unquote
-                    # URL-decode the data parameter
-                    json_str = unquote(body_text[5:])  # Remove 'data=' and unquote
-                    print(f"URL-decoded JSON string: {json_str}")
-                    # Parse the JSON
-                    parsed_json = json.loads(json_str)
-                    print(f"Successfully parsed URL-encoded JSON: {parsed_json}")
-                    callback_data.update(parsed_json)
-                    
-                    # If the data is nested inside a 'data' key, extract it
-                    if 'data' in parsed_json and isinstance(parsed_json['data'], dict):
-                        # Add the nested data with prefixed keys for easy access
-                        for key, value in parsed_json['data'].items():
-                            callback_data[f"data_{key}"] = value
-                        print(f"Extracted nested data from 'data' field")
-                except Exception as e:
-                    print(f"Failed to parse URL-encoded JSON: {str(e)}")
-            # If it looks like a form but wasn't parsed
-            elif '=' in body_text and '&' in body_text:
-                try:
-                    from urllib.parse import parse_qs
-                    form_data = parse_qs(body_text)
-                    text_dict = {k: v[0] if len(v) == 1 else v for k, v in form_data.items()}
-                    print(f"Parsed as form string: {text_dict}")
-                    callback_data.update(text_dict)
-                    
-                    # If there's a 'data' parameter containing JSON
-                    if 'data' in text_dict:
-                        try:
-                            data_json = json.loads(text_dict['data'])
-                            print(f"Parsed 'data' parameter as JSON: {data_json}")
-                            callback_data['data_parsed'] = data_json
-                            # Also add top-level keys for easy access
-                            for key, value in data_json.items():
-                                callback_data[f"data_{key}"] = value
-                        except Exception as e:
-                            print(f"Failed to parse 'data' parameter as JSON: {str(e)}")
-                except Exception as e:
-                    print(f"Failed to parse as form string: {str(e)}")
-            elif body_text.strip().startswith('{') and body_text.strip().endswith('}'):
-                try:
-                    # Try one more time to parse as JSON
-                    text_json = json.loads(body_text)
-                    print(f"Parsed text as JSON: {text_json}")
-                    callback_data.update(text_json)
-                except Exception as e:
-                    print(f"Failed to parse text as JSON: {str(e)}")
-            else:
-                callback_data["raw_text"] = body_text
-    except Exception as e:
-        print(f"Error decoding body as text: {str(e)}")
-    
-    # 4. Add all headers to the data dictionary
-    headers_dict = {f"header_{k.lower().replace('-', '_')}": v for k, v in request.headers.items()}
-    print(f"Adding headers to data: {headers_dict}")
-    callback_data.update(headers_dict)
-    
-    # 5. Extract session_id from headers if present
-    if "session-id" in request.headers:
-        callback_data["session_id"] = request.headers.get("session-id")
-        print(f"Found session_id in headers: {callback_data['session_id']}")
-    elif "x-session-id" in request.headers:
-        callback_data["session_id"] = request.headers.get("x-session-id")
-        print(f"Found x-session-id in headers: {callback_data['session_id']}")
-    
-    print(f"Final callback data dictionary: {callback_data}")
-    
-    print("=" * 60)
-
     # Always respond with a success even if we have problems
     # This prevents the OpenAPI service from retrying and creating duplicate records
     response_data = {"message": "Callback received", "success": True}
     
     try:
+        # Log webhook call details
+        print("=" * 60)
+        print(f"WEBHOOK CALLED: /webhook/negative-event at {request.url}")
+        print(f"Client IP: {request.client.host if request.client else 'Unknown'}")
+        print(f"Request headers: {dict(request.headers)}")
+        
+        # Get raw request data
+        raw_body = await request.body()
+        print(f"Raw body (bytes): {raw_body}")
+        
+        # Try all possible ways to extract data from the request
+        callback_data = {}
+        
+        # 1. Try to parse as JSON
+        try:
+            body_json = await request.json()
+            print(f"Successfully parsed as JSON: {json.dumps(body_json, indent=2)}")
+            callback_data.update(body_json)
+        except Exception as e:
+            print(f"Not valid JSON: {str(e)}")
+        
+        # 2. Try to parse as form data
+        try:
+            body_form = await request.form()
+            if body_form:
+                form_dict = dict(body_form)
+                print(f"Successfully parsed as form: {form_dict}")
+                callback_data.update(form_dict)
+        except Exception as e:
+            print(f"Not valid form data: {str(e)}")
+        
+        # 3. Try to parse as plain text
+        try:
+            body_text = raw_body.decode('utf-8', errors='replace')
+            print(f"Body as text: {body_text}")
+            if body_text and not callback_data:
+                # Handle the special case from OpenAPI - data parameter with URL-encoded JSON
+                if body_text.startswith('data='):
+                    try:
+                        from urllib.parse import unquote
+                        # URL-decode the data parameter
+                        json_str = unquote(body_text[5:])  # Remove 'data=' and unquote
+                        print(f"URL-decoded JSON string: {json_str}")
+                        # Parse the JSON
+                        parsed_json = json.loads(json_str)
+                        print(f"Successfully parsed URL-encoded JSON: {parsed_json}")
+                        callback_data.update(parsed_json)
+                        
+                        # If the data is nested inside a 'data' key, extract it
+                        if 'data' in parsed_json and isinstance(parsed_json['data'], dict):
+                            # Add the nested data with prefixed keys for easy access
+                            for key, value in parsed_json['data'].items():
+                                callback_data[f"data_{key}"] = value
+                            print(f"Extracted nested data from 'data' field")
+                    except Exception as e:
+                        print(f"Failed to parse URL-encoded JSON: {str(e)}")
+                # If it looks like a form but wasn't parsed
+                elif '=' in body_text and '&' in body_text:
+                    try:
+                        from urllib.parse import parse_qs
+                        form_data = parse_qs(body_text)
+                        text_dict = {k: v[0] if len(v) == 1 else v for k, v in form_data.items()}
+                        print(f"Parsed as form string: {text_dict}")
+                        callback_data.update(text_dict)
+                        
+                        # If there's a 'data' parameter containing JSON
+                        if 'data' in text_dict:
+                            try:
+                                data_json = json.loads(text_dict['data'])
+                                print(f"Parsed 'data' parameter as JSON: {data_json}")
+                                callback_data['data_parsed'] = data_json
+                                # Also add top-level keys for easy access
+                                for key, value in data_json.items():
+                                    callback_data[f"data_{key}"] = value
+                            except Exception as e:
+                                print(f"Failed to parse 'data' parameter as JSON: {str(e)}")
+                    except Exception as e:
+                        print(f"Failed to parse as form string: {str(e)}")
+                elif body_text.strip().startswith('{') and body_text.strip().endswith('}'):
+                    try:
+                        # Try one more time to parse as JSON
+                        text_json = json.loads(body_text)
+                        print(f"Parsed text as JSON: {text_json}")
+                        callback_data.update(text_json)
+                    except Exception as e:
+                        print(f"Failed to parse text as JSON: {str(e)}")
+                else:
+                    callback_data["raw_text"] = body_text
+        except Exception as e:
+            print(f"Error decoding body as text: {str(e)}")
+        
+        # 4. Add all headers to the data dictionary
+        headers_dict = {f"header_{k.lower().replace('-', '_')}": v for k, v in request.headers.items()}
+        print(f"Adding headers to data: {headers_dict}")
+        callback_data.update(headers_dict)
+        
+        # 5. Extract session_id from headers if present
+        if "session-id" in request.headers:
+            callback_data["session_id"] = request.headers.get("session-id")
+            print(f"Found session_id in headers: {callback_data['session_id']}")
+        elif "x-session-id" in request.headers:
+            callback_data["session_id"] = request.headers.get("x-session-id")
+            print(f"Found x-session-id in headers: {callback_data['session_id']}")
+        
+        print(f"Final callback data dictionary: {callback_data}")
+        print("=" * 60)
+        
         # Extract the ID and status from the callback data with many fallbacks
         external_id = None
         status = None
@@ -672,24 +900,15 @@ async def negative_event_callback(
             response_data["warning"] = f"Request with external ID {external_id} not found"
             return response_data
         
-        print(f"Found request in database: id={db_request.id}, current_status={db_request.status}")
-        
         # Update the request with callback data
         db_request.callback_json = callback_data
-        db_request.status = status or "CALLBACK_RECEIVED"
+        if status:
+            db_request.status = status
         db.add(db_request)
         db.commit()
-        print(f"Updated request status to: {db_request.status}")
         
-        # If the status is "COMPLETED", fetch the detail in the background
-        if status == "COMPLETED":
-            print(f"Scheduling background task to fetch details for request_id={db_request.id}")
-            background_tasks.add_task(
-                fetch_negative_detail, 
-                request_id=db_request.id,
-                external_id=external_id,
-                db=db
-            )
+        # Launch background task to fetch details
+        background_tasks.add_task(fetch_negative_detail, db_request.id, external_id, db)
         
         # Add request ID to response
         response_data["request_id"] = db_request.id
@@ -704,19 +923,194 @@ async def negative_event_callback(
         response_data["warning"] = f"Internal error occurred, but accepting callback: {str(e)}"
         return response_data
 
-# Custom function to modify OpenAPI schema generation
-def custom_openapi(app):
-    if app.openapi_schema:
-        return app.openapi_schema
+# This route will NOT be shown in Swagger docs - Callback for company full data
+@router.post("/webhook/company-full", include_in_schema=False, status_code=200)
+async def company_full_callback(
+    request: Request,
+    db: Session = Depends(database.get_db)
+):
+    """
+    Webhook endpoint to receive callbacks from OpenAPI after a company full data request is complete.
+    This endpoint is not exposed in the public API documentation.
+    """
+    # Always respond with a success to prevent retries
+    response_data = {"message": "Company data callback received", "success": True}
     
-    openapi_schema = get_openapi(
-        title="BFlows OpenAPI Proxy",
-        version="1.0.0",
-        description="FastAPI proxy service for OpenAPI with versioning support",
-        routes=app.routes,
-    )
-    
-    # The webhook route is already excluded via include_in_schema=False
-    
-    app.openapi_schema = openapi_schema
-    return app.openapi_schema
+    try:
+        # Log webhook call details
+        print("=" * 60)
+        print(f"WEBHOOK CALLED: /webhook/company-full at {request.url}")
+        print(f"Client IP: {request.client.host if request.client else 'Unknown'}")
+        print(f"Request headers: {dict(request.headers)}")
+        
+        # Get raw request data
+        raw_body = await request.body()
+        print(f"Raw body (bytes): {raw_body}")
+        
+        # Try all possible ways to extract data from the request
+        callback_data = {}
+        
+        # 1. Try to parse as JSON
+        try:
+            body_json = await request.json()
+            print(f"Successfully parsed as JSON: {json.dumps(body_json, indent=2)}")
+            callback_data.update(body_json)
+        except Exception as e:
+            print(f"Not valid JSON: {str(e)}")
+        
+        # 2. Try to parse as form data
+        try:
+            body_form = await request.form()
+            if body_form:
+                form_dict = dict(body_form)
+                print(f"Successfully parsed as form: {form_dict}")
+                callback_data.update(form_dict)
+        except Exception as e:
+            print(f"Not valid form data: {str(e)}")
+        
+        # 3. Try to parse as plain text
+        try:
+            body_text = raw_body.decode('utf-8', errors='replace')
+            print(f"Body as text: {body_text}")
+            if body_text and not callback_data:
+                # Handle the special case from OpenAPI - data parameter with URL-encoded JSON
+                if body_text.startswith('data='):
+                    try:
+                        from urllib.parse import unquote
+                        # URL-decode the data parameter
+                        json_str = unquote(body_text[5:])  # Remove 'data=' and unquote
+                        print(f"URL-decoded JSON string: {json_str}")
+                        # Parse the JSON
+                        parsed_json = json.loads(json_str)
+                        print(f"Successfully parsed URL-encoded JSON: {parsed_json}")
+                        callback_data.update(parsed_json)
+                    except Exception as e:
+                        print(f"Failed to parse URL-encoded JSON: {str(e)}")
+                # If it looks like a form but wasn't parsed
+                elif '=' in body_text and '&' in body_text:
+                    try:
+                        from urllib.parse import parse_qs
+                        form_data = parse_qs(body_text)
+                        text_dict = {k: v[0] if len(v) == 1 else v for k, v in form_data.items()}
+                        print(f"Parsed as form string: {text_dict}")
+                        callback_data.update(text_dict)
+                    except Exception as e:
+                        print(f"Failed to parse as form string: {str(e)}")
+                elif body_text.strip().startswith('{') and body_text.strip().endswith('}'):
+                    try:
+                        # Try one more time to parse as JSON
+                        text_json = json.loads(body_text)
+                        print(f"Parsed text as JSON: {text_json}")
+                        callback_data.update(text_json)
+                    except Exception as e:
+                        print(f"Failed to parse text as JSON: {str(e)}")
+                else:
+                    callback_data["raw_text"] = body_text
+        except Exception as e:
+            print(f"Error decoding body as text: {str(e)}")
+        
+        # 4. Add all headers to the data dictionary
+        headers_dict = {f"header_{k.lower().replace('-', '_')}": v for k, v in request.headers.items()}
+        print(f"Adding headers to data: {headers_dict}")
+        callback_data.update(headers_dict)
+        
+        # Find session_id in headers (could be in different formats)
+        session_id = None
+        for key in request.headers.keys():
+            if "session" in key.lower():
+                session_id = request.headers.get(key)
+                print(f"Found session ID in header {key}: {session_id}")
+                break
+        
+        if not session_id and "header_session_id" in callback_data:
+            session_id = callback_data["header_session_id"]
+            print(f"Found session ID in callback data: {session_id}")
+        
+        # Extract the company ID from the callback data
+        external_id = None
+        status = "COMPLETED"  # Default status for company data
+        
+        # Try all possible locations for the external_id
+        for id_key in ['id', 'data.id', 'request_id', 'company_id', 'identifier']:
+            if id_key in callback_data:
+                external_id = callback_data[id_key]
+                print(f"Found external_id in field {id_key}: {external_id}")
+                break
+            elif '.' in id_key:
+                parent, child = id_key.split('.', 1)
+                if parent in callback_data and isinstance(callback_data[parent], dict) and child in callback_data[parent]:
+                    external_id = callback_data[parent][child]
+                    print(f"Found external_id in nested field {id_key}: {external_id}")
+                    break
+        
+        # If we still don't have an external_id, check if we can get it from the URL
+        if not external_id and "url" in callback_data:
+            url = callback_data["url"]
+            # Try to extract ID from URL - this assumes the URL format is something like "/IT-full/{id}"
+            parts = url.split("/")
+            if parts and parts[-1] not in ["", "IT-full"]:
+                external_id = parts[-1]
+                print(f"Extracted external_id from URL: {external_id}")
+        
+        if not external_id:
+            print("WARNING: Could not determine external ID from callback, returning success anyway")
+            response_data["warning"] = "Missing external ID in callback data"
+            return response_data
+        
+        # Find the corresponding record in the database
+        # Try matching by external_id first
+        db_record = db.query(models.CompanyFullData).filter(
+            models.CompanyFullData.external_id == external_id,
+            models.CompanyFullData.status == "PENDING",
+            models.CompanyFullData.version_status == "ACTIVE"
+        ).order_by(models.CompanyFullData.created_at.desc()).first()
+        
+        # If not found by external_id, try by session_id (look in request_json.callback.headers.session_id)
+        if not db_record and session_id:
+            all_pending = db.query(models.CompanyFullData).filter(
+                models.CompanyFullData.status == "PENDING",
+                models.CompanyFullData.version_status == "ACTIVE"
+            ).order_by(models.CompanyFullData.created_at.desc()).all()
+            
+            for record in all_pending:
+                try:
+                    req_json = record.request_json
+                    if req_json and isinstance(req_json, dict) and 'callback' in req_json:
+                        callback = req_json['callback']
+                        if isinstance(callback, dict) and 'headers' in callback:
+                            headers = callback['headers']
+                            if isinstance(headers, dict) and 'session_id' in headers:
+                                if headers['session_id'] == session_id:
+                                    db_record = record
+                                    print(f"Found record by session_id: {session_id}")
+                                    break
+                except Exception as e:
+                    print(f"Error checking record for session_id: {str(e)}")
+        
+        if not db_record:
+            print(f"WARNING: No pending company data record found for external_id={external_id}")
+            response_data["warning"] = f"No pending record found for external_id={external_id}"
+            return response_data
+        
+        # Update the record with the callback data
+        db_record.callback_json = callback_data
+        db_record.status = status
+        
+        # Extract the identifier from callback data if it's available and our record has none
+        if not db_record.identifier and "identifier" in callback_data:
+            db_record.identifier = callback_data["identifier"]
+        
+        db.add(db_record)
+        db.commit()
+        db.refresh(db_record)
+        
+        response_data["company_id"] = external_id
+        response_data["request_id"] = db_record.id
+        print(f"Successfully processed company data callback: {response_data}")
+        
+        return response_data
+    except Exception as e:
+        print(f"ERROR processing company data callback: {str(e)}")
+        response_data["error"] = str(e)
+        # Still return 200 OK to prevent retries
+        return response_data

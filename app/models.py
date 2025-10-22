@@ -20,6 +20,21 @@ class CreditScoreResponse(Base):
     created_at = Column(DateTime(timezone=True), server_default=timezone_now)
     updated_at = Column(DateTime(timezone=True), onupdate=timezone_now)
 
+class CompanyFullData(Base):
+    __tablename__ = "company_full_data"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    identifier = Column(String, index=True, nullable=False)  # VAT or tax code
+    external_id = Column(String, index=True, nullable=True)  # ID from the OpenAPI service
+    status = Column(String, default="PENDING", nullable=False)  # PENDING, COMPLETED, ERROR
+    version_status = Column(String, default="ACTIVE", nullable=False)  # Can be "ACTIVE" or "NOT ACTIVE" for versioning
+    request_json = Column(JSON)  # Original request data
+    response_json = Column(JSON)  # Response from initial request
+    callback_json = Column(JSON, nullable=True)  # Complete callback data (including detailed information)
+    status_code = Column(Integer)
+    created_at = Column(DateTime(timezone=True), server_default=timezone_now)
+    updated_at = Column(DateTime(timezone=True), onupdate=timezone_now)
+
 class NegativaRequest(Base):
     __tablename__ = "negativa_requests"
     
