@@ -115,14 +115,10 @@ Use the password specified in your `.env` file for `DB_ROOT_PASSWORD`.
 
 #### Negative Events Endpoints
 
-- `GET /negative-event` - Unified endpoint for negative event checks with request body:
-  ```json
-  {
-    "cf_piva": "TAXCODE123456"
-  }
-  ```
+- `GET /negative-event?cf_piva=TAXCODE123456` - Unified endpoint for negative event checks
   - Use with `update=false` (default) to get cached data or create new request if none exists
   - Use with `update=true` to force a new request and mark previous records as inactive
+  - Example: `GET /negative-event?cf_piva=ABC123&update=true`
   
 - `POST /webhook/negative-event` - Hidden webhook endpoint (not exposed in Swagger UI) for receiving callbacks from OpenAPI
 

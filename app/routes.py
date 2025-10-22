@@ -187,11 +187,11 @@ async def get_credit_score(
 
 @router.get("/negative-event", response_model=schemas.NegativaFullResponse)
 async def get_negative_event(
+    cf_piva: str = Query(..., description="Tax code or VAT number to check for negative events"),
     update: bool = Query(
         False, 
         description="When true, forces a new request and marks old ones as inactive"
     ),
-    cf_piva: str = Body(..., embed=True, description="Tax code or VAT number to check for negative events"),
     db: Session = Depends(database.get_db),
     request: Request = None
 ):
@@ -207,7 +207,7 @@ async def get_negative_event(
     - If no request exists: Creates a new request to OpenAPI and returns PENDING status
     
     ## Parameters
-    - cf_piva: Tax code or VAT number to check
+    - cf_piva: Tax code or VAT number to check (query parameter)
     - update: When true, creates a new request even if an existing one is found
     
     ## Response
@@ -215,6 +215,10 @@ async def get_negative_event(
     - Request information (status, timestamps, etc.)
     - Detail information if available (presence of negative events, etc.)
     - If the check is still pending, only basic request info is returned
+    
+    ## Example Usage
+    - Get cached data: `GET /negative-event?cf_piva=ABC123`
+    - Force refresh: `GET /negative-event?cf_piva=ABC123&update=true`
     """
     # Generate a random session ID for this request
     import uuid
@@ -297,6 +301,13 @@ async def get_negative_event(
         "callback": callback_config
     }
     
+    # Log the request details
+    print("=" * 40)
+    print(f"Making POST request to OpenAPI endpoint: {url}")
+    print(f"Payload for OpenAPI:")
+    print(json.dumps(payload, indent=2))
+    print("=" * 40)
+    
     try:
         # Make the request to OpenAPI
         async with httpx.AsyncClient() as client:
@@ -304,9 +315,29 @@ async def get_negative_event(
             headers["accept"] = "application/json"
             headers["Content-Type"] = "application/json"
             
+            # Log headers without exposing token
+            headers_log = headers.copy()
+            if "Authorization" in headers_log:
+                headers_log["Authorization"] = "Bearer [REDACTED]"
+            print(f"Request headers: {headers_log}")
+            
+            # Make the POST request to OpenAPI
             resp = await client.post(url, json=payload, headers=headers)
+            
+            # Log the response
+            print(f"OpenAPI response status code: {resp.status_code}")
+            print(f"OpenAPI response headers: {dict(resp.headers)}")
+            
+            try:
+                response_text = resp.text
+                print(f"OpenAPI response text: {response_text[:500]}")  # Print only first 500 chars to avoid cluttering logs
+                response_json = resp.json()
+                print(f"OpenAPI response JSON: {json.dumps(response_json, indent=2)}")
+            except Exception as e:
+                print(f"Failed to parse response as JSON: {str(e)}")
+                response_json = {"error": "Invalid JSON response"}
+            
             resp.raise_for_status()
-            response_json = resp.json()
             
             # Extract external ID from the response
             external_id = response_json.get('data', {}).get('id')
