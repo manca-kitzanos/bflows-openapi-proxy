@@ -387,6 +387,8 @@ async def get_negative_event(
 # Background task to fetch negative event details
 async def fetch_negative_detail(request_id: int, external_id: str, db: Session):
     """Background task to fetch details for a negative event after callback"""
+    print(f"=== BACKGROUND TASK: fetch_negative_detail started for request_id={request_id}, external_id={external_id} ===")
+    
     # Get the request from the database
     db_request = db.query(models.NegativaRequest).filter(
         models.NegativaRequest.id == request_id
@@ -398,28 +400,53 @@ async def fetch_negative_detail(request_id: int, external_id: str, db: Session):
     
     # Call the detail endpoint
     url = f"{OPENAPI_BASE_URL_RISK}/IT-negativita/{external_id}/dettaglio"
+    print(f"Making GET request to OpenAPI details endpoint: {url}")
     
     try:
         headers = get_auth_headers()
         headers["accept"] = "application/json"
         
+        # Log headers without exposing token
+        headers_log = headers.copy()
+        if "Authorization" in headers_log:
+            headers_log["Authorization"] = "Bearer [REDACTED]"
+        print(f"Request headers: {headers_log}")
+        
         async with httpx.AsyncClient() as client:
-            resp = await client.get(url, headers=headers)
+            resp = await client.get(url, headers=headers, timeout=30.0)
             status_code = resp.status_code
+            
+            print(f"OpenAPI details response status code: {status_code}")
+            print(f"OpenAPI details response headers: {dict(resp.headers)}")
+            
+            try:
+                response_text = resp.text
+                print(f"OpenAPI details response text: {response_text[:500]}...")  # Print first 500 chars
+                detail_json = resp.json()
+                print(f"OpenAPI details response JSON: {json.dumps(detail_json, indent=2)}")
+            except Exception as json_err:
+                print(f"Failed to parse response as JSON: {str(json_err)}")
+                # If we can't parse the response, create a minimal error detail
+                detail_json = {"error": f"Invalid JSON response: {str(json_err)}"}
+                # Still continue to save what we can
+            
             resp.raise_for_status()
-            detail_json = resp.json()
             
             # Create or update the detail record
             detail = db.query(models.NegativaDetail).filter(
                 models.NegativaDetail.request_id == request_id
             ).first()
             
-            # Extract presence flags
+            # Extract presence flags (with defaults if missing)
             presence_pregiudizievoli = detail_json.get('data', {}).get('presenzaPregiudizievoli', False)
             presence_procedure = detail_json.get('data', {}).get('presenzaProcedure', False)
             presence_protesti = detail_json.get('data', {}).get('presenzaProtesti', False)
             
+            print(f"Extracted flags: pregiudizievoli={presence_pregiudizievoli}, " + 
+                  f"procedure={presence_procedure}, protesti={presence_protesti}")
+            
             if detail:
+                print(f"Updating existing detail record id={detail.id}")
                 # Update existing detail
                 detail.detail_json = detail_json
                 detail.status_code = status_code
@@ -427,6 +454,7 @@ async def fetch_negative_detail(request_id: int, external_id: str, db: Session):
                 detail.presence_procedure = presence_procedure
                 detail.presence_protesti = presence_protesti
             else:
+                print(f"Creating new detail record for request_id={request_id}")
                 # Create new detail
                 detail = models.NegativaDetail(
                     request_id=request_id,
@@ -442,6 +470,7 @@ async def fetch_negative_detail(request_id: int, external_id: str, db: Session):
             db_request.status = "COMPLETED"
             db.add(db_request)
             db.commit()
+            print(f"Detail saved and request status updated to COMPLETED")
     
     except Exception as e:
         print(f"Error fetching negative event detail: {str(e)}")
@@ -449,25 +478,77 @@ async def fetch_negative_detail(request_id: int, external_id: str, db: Session):
         db_request.status = "ERROR"
         db.add(db_request)
         db.commit()
+        print(f"Request status updated to ERROR")
+    
+    print("=== BACKGROUND TASK: fetch_negative_detail completed ===")
 
 # This route will NOT be shown in Swagger docs
 @router.post("/webhook/negative-event", include_in_schema=False)
 async def negative_event_callback(
     background_tasks: BackgroundTasks,
-    callback_data: Dict[str, Any] = Body(...),
+    request: Request,
     db: Session = Depends(database.get_db)
 ):
     """
     Webhook endpoint to receive callbacks from OpenAPI after a negative event check is complete.
     This endpoint is not exposed in the public API documentation.
     """
+    # Log webhook call details
+    print("=" * 60)
+    print(f"WEBHOOK CALLED: /webhook/negative-event at {request.url}")
+    print(f"Client IP: {request.client.host if request.client else 'Unknown'}")
+    print(f"Request headers: {dict(request.headers)}")
+    print(f"Raw body: {await request.body()}")
+    
+    # Try to parse the body as JSON
     try:
-        # Extract the ID and status from the callback data
+        callback_data = await request.json()
+        print(f"Parsed callback data: {json.dumps(callback_data, indent=2)}")
+    except json.JSONDecodeError:
+        print("Warning: Failed to parse request body as JSON, trying to use raw body")
+        try:
+            # Try to get the body as text
+            body_text = (await request.body()).decode('utf-8')
+            print(f"Body text: {body_text}")
+            # If body is empty, create an empty dict
+            if not body_text.strip():
+                callback_data = {}
+            else:
+                # If it looks like a form, parse it
+                if '=' in body_text:
+                    from urllib.parse import parse_qs
+                    form_data = parse_qs(body_text)
+                    callback_data = {k: v[0] if len(v) == 1 else v for k, v in form_data.items()}
+                    print(f"Parsed form data: {callback_data}")
+                else:
+                    # Otherwise just use it as a string
+                    callback_data = {"raw_data": body_text}
+        except Exception as e:
+            print(f"Error parsing body: {str(e)}")
+            callback_data = {}
+    
+    print("=" * 60)
+
+    try:
+        # Extract the ID and status from the callback data - use request headers if missing from body
         external_id = callback_data.get('id')
         status = callback_data.get('status')
         
+        # Get ID and status from headers if they're not in the body
+        if not external_id and 'x-callback-id' in request.headers:
+            external_id = request.headers.get('x-callback-id')
+            print(f"Using external_id from header: {external_id}")
+        
+        if not status and 'x-callback-status' in request.headers:
+            status = request.headers.get('x-callback-status')
+            print(f"Using status from header: {status}")
+        
+        print(f"Processing webhook: external_id={external_id}, status={status}")
+        
         if not external_id:
-            raise HTTPException(status_code=400, detail="Missing ID in callback data")
+            error_msg = "Missing ID in callback data"
+            print(f"Webhook ERROR: {error_msg}")
+            raise HTTPException(status_code=400, detail=error_msg)
         
         # Find the corresponding request in the database
         db_request = db.query(models.NegativaRequest).filter(
@@ -475,16 +556,22 @@ async def negative_event_callback(
         ).first()
         
         if not db_request:
-            raise HTTPException(status_code=404, detail=f"Request with external ID {external_id} not found")
+            error_msg = f"Request with external ID {external_id} not found"
+            print(f"Webhook ERROR: {error_msg}")
+            raise HTTPException(status_code=404, detail=error_msg)
+        
+        print(f"Found request in database: id={db_request.id}, current_status={db_request.status}")
         
         # Update the request with callback data
         db_request.callback_json = callback_data
         db_request.status = status or "CALLBACK_RECEIVED"
         db.add(db_request)
         db.commit()
+        print(f"Updated request status to: {db_request.status}")
         
         # If the status is "COMPLETED", fetch the detail in the background
         if status == "COMPLETED":
+            print(f"Scheduling background task to fetch details for request_id={db_request.id}")
             background_tasks.add_task(
                 fetch_negative_detail, 
                 request_id=db_request.id,
@@ -492,8 +579,11 @@ async def negative_event_callback(
                 db=db
             )
         
+        response_data = {"message": "Callback received successfully", "request_id": db_request.id}
+        print(f"Webhook successful, returning: {response_data}")
+        
         # Return success
-        return {"message": "Callback received successfully", "request_id": db_request.id}
+        return response_data
     
     except HTTPException:
         raise
