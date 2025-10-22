@@ -1067,19 +1067,8 @@ async def company_full_callback(
                     print(f"Found external_id in nested field {id_key}: {external_id}")
                     break
         
-        # If we still don't have an external_id, check if we can get it from the URL
-        if not external_id and "url" in callback_data:
-            url = callback_data["url"]
-            # Try to extract ID from URL - this assumes the URL format is something like "/IT-full/{id}"
-            parts = url.split("/")
-            if parts and parts[-1] not in ["", "IT-full"]:
-                external_id = parts[-1]
-                print(f"Extracted external_id from URL: {external_id}")
-        
-        if not external_id:
-            print("WARNING: Could not determine external ID from callback, returning success anyway")
-            response_data["warning"] = "Missing external ID in callback data"
-            return response_data
+        # Skip external_id checks - it's not present in the callback data
+        # We'll rely on the vatCode/taxCode to find the corresponding record
         
         # Extract vatCode or taxCode from the callback data
         vat_code = None
