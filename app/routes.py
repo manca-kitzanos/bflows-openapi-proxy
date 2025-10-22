@@ -817,15 +817,31 @@ async def negative_event_callback(
                         print(f"Parsed as form string: {text_dict}")
                         callback_data.update(text_dict)
                         
-                        # If there's a 'data' parameter containing JSON
+                                        # If there's a 'data' parameter containing JSON
                         if 'data' in text_dict:
                             try:
                                 data_json = json.loads(text_dict['data'])
                                 print(f"Parsed 'data' parameter as JSON: {data_json}")
                                 callback_data['data_parsed'] = data_json
-                                # Also add top-level keys for easy access
+                                
+                                # Extract all fields from the 'data' parameter
+                                # First add data_json to callback_data
                                 for key, value in data_json.items():
                                     callback_data[f"data_{key}"] = value
+                                
+                                # Then specifically handle nested 'data' object if present
+                                if 'data' in data_json and isinstance(data_json['data'], dict):
+                                    inner_data = data_json['data']
+                                    print(f"Found inner data object: {inner_data}")
+                                    
+                                    # Add all inner data fields with data_inner_ prefix
+                                    for key, value in inner_data.items():
+                                        callback_data[f"data_inner_{key}"] = value
+                                    
+                                    # Special handling for ID field
+                                    if 'id' in inner_data:
+                                        callback_data['id'] = inner_data['id']
+                                        print(f"Extracted ID from inner data: {inner_data['id']}")
                             except Exception as e:
                                 print(f"Failed to parse 'data' parameter as JSON: {str(e)}")
                     except Exception as e:
@@ -864,7 +880,7 @@ async def negative_event_callback(
         status = None
         
         # Try all possible keys for external_id
-        for id_key in ['id', 'external_id', 'request_id', 'data.id', 'data_id']:
+        for id_key in ['id', 'external_id', 'request_id', 'data.id', 'data_id', 'data_inner_id']:
             if id_key in callback_data:
                 external_id = callback_data[id_key]
                 print(f"Found external_id in field {id_key}: {external_id}")
@@ -876,6 +892,30 @@ async def negative_event_callback(
                     external_id = callback_data[parent][child]
                     print(f"Found external_id in nested field {id_key}: {external_id}")
                     break
+                
+        # Special check for data field containing JSON with 'data.id' 
+        if not external_id and 'data' in callback_data and isinstance(callback_data['data'], str):
+            try:
+                # Try to parse the 'data' string as JSON
+                nested_json = json.loads(callback_data['data'])
+                
+                # Check for inner data structure
+                if 'data' in nested_json and isinstance(nested_json['data'], dict):
+                    inner_data = nested_json['data']
+                    
+                    # Check for ID in the inner data
+                    if 'id' in inner_data:
+                        external_id = inner_data['id']
+                        print(f"Found external_id in nested JSON data field: {external_id}")
+                        
+                        # Also store the data object for future use
+                        callback_data['data_parsed'] = nested_json
+                        
+                        # Add inner data fields with prefix
+                        for key, value in inner_data.items():
+                            callback_data[f"data_inner_{key}"] = value
+            except Exception as e:
+                print(f"Failed to extract ID from data field: {str(e)}")
         
         # Try all possible header keys for external_id
         for header_key in ['x-callback-id', 'x-request-id', 'x-external-id']:
