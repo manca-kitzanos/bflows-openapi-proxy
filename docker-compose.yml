@@ -38,8 +38,16 @@ services:
       - OPENAPI_BASE_URL_RISK=${OPENAPI_BASE_URL_RISK}
       - OPENAPI_TOKEN_RISK=${OPENAPI_TOKEN_RISK}
       - TIMEZONE=${TIMEZONE}
+      - DEBUG=${DEBUG:-False}
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@172.25.0.101:${DB_PORT}/${DB_NAME}?options=-csearch_path%3D${DB_SCHEMA}
     restart: always
+    # Add dns configuration to ensure proper name resolution
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    # Add extra hosts for potential name resolution issues
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       public:
         ipv4_address: 172.25.0.102
