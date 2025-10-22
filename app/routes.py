@@ -483,7 +483,7 @@ async def fetch_negative_detail(request_id: int, external_id: str, db: Session):
     print("=== BACKGROUND TASK: fetch_negative_detail completed ===")
 
 # This route will NOT be shown in Swagger docs
-@router.post("/webhook/negative-event", include_in_schema=False)
+@router.post("/webhook/negative-event", include_in_schema=False, status_code=200)
 async def negative_event_callback(
     background_tasks: BackgroundTasks,
     request: Request,
@@ -500,65 +500,145 @@ async def negative_event_callback(
     print(f"Request headers: {dict(request.headers)}")
     print(f"Raw body: {await request.body()}")
     
-    # Try to parse the body as JSON
+    # Get raw request data
+    raw_body = await request.body()
+    print(f"Raw body (bytes): {raw_body}")
+    
+    # Try all possible ways to extract data from the request
+    callback_data = {}
+    
+    # 1. Try to parse as JSON
     try:
-        callback_data = await request.json()
-        print(f"Parsed callback data: {json.dumps(callback_data, indent=2)}")
-    except json.JSONDecodeError:
-        print("Warning: Failed to parse request body as JSON, trying to use raw body")
-        try:
-            # Try to get the body as text
-            body_text = (await request.body()).decode('utf-8')
-            print(f"Body text: {body_text}")
-            # If body is empty, create an empty dict
-            if not body_text.strip():
-                callback_data = {}
-            else:
-                # If it looks like a form, parse it
-                if '=' in body_text:
+        body_json = await request.json()
+        print(f"Successfully parsed as JSON: {json.dumps(body_json, indent=2)}")
+        callback_data.update(body_json)
+    except Exception as e:
+        print(f"Not valid JSON: {str(e)}")
+    
+    # 2. Try to parse as form data
+    try:
+        body_form = await request.form()
+        if body_form:
+            form_dict = dict(body_form)
+            print(f"Successfully parsed as form: {form_dict}")
+            callback_data.update(form_dict)
+    except Exception as e:
+        print(f"Not valid form data: {str(e)}")
+    
+    # 3. Try to parse as plain text
+    try:
+        body_text = raw_body.decode('utf-8', errors='replace')
+        print(f"Body as text: {body_text}")
+        if body_text and not callback_data:
+            # If it looks like a form but wasn't parsed
+            if '=' in body_text and '&' in body_text:
+                try:
                     from urllib.parse import parse_qs
                     form_data = parse_qs(body_text)
-                    callback_data = {k: v[0] if len(v) == 1 else v for k, v in form_data.items()}
-                    print(f"Parsed form data: {callback_data}")
-                else:
-                    # Otherwise just use it as a string
-                    callback_data = {"raw_data": body_text}
-        except Exception as e:
-            print(f"Error parsing body: {str(e)}")
-            callback_data = {}
+                    text_dict = {k: v[0] if len(v) == 1 else v for k, v in form_data.items()}
+                    print(f"Parsed as form string: {text_dict}")
+                    callback_data.update(text_dict)
+                except Exception as e:
+                    print(f"Failed to parse as form string: {str(e)}")
+            elif body_text.strip().startswith('{') and body_text.strip().endswith('}'):
+                try:
+                    # Try one more time to parse as JSON
+                    text_json = json.loads(body_text)
+                    print(f"Parsed text as JSON: {text_json}")
+                    callback_data.update(text_json)
+                except Exception as e:
+                    print(f"Failed to parse text as JSON: {str(e)}")
+            else:
+                callback_data["raw_text"] = body_text
+    except Exception as e:
+        print(f"Error decoding body as text: {str(e)}")
+    
+    # 4. Add all headers to the data dictionary
+    headers_dict = {f"header_{k.lower().replace('-', '_')}": v for k, v in request.headers.items()}
+    print(f"Adding headers to data: {headers_dict}")
+    callback_data.update(headers_dict)
+    
+    # 5. Extract session_id from headers if present
+    if "session-id" in request.headers:
+        callback_data["session_id"] = request.headers.get("session-id")
+        print(f"Found session_id in headers: {callback_data['session_id']}")
+    elif "x-session-id" in request.headers:
+        callback_data["session_id"] = request.headers.get("x-session-id")
+        print(f"Found x-session-id in headers: {callback_data['session_id']}")
+    
+    print(f"Final callback data dictionary: {callback_data}")
     
     print("=" * 60)
 
+    # Always respond with a success even if we have problems
+    # This prevents the OpenAPI service from retrying and creating duplicate records
+    response_data = {"message": "Callback received", "success": True}
+    
     try:
-        # Extract the ID and status from the callback data - use request headers if missing from body
-        external_id = callback_data.get('id')
-        status = callback_data.get('status')
+        # Extract the ID and status from the callback data with many fallbacks
+        external_id = None
+        status = None
         
-        # Get ID and status from headers if they're not in the body
-        if not external_id and 'x-callback-id' in request.headers:
-            external_id = request.headers.get('x-callback-id')
-            print(f"Using external_id from header: {external_id}")
+        # Try all possible keys for external_id
+        for id_key in ['id', 'external_id', 'request_id', 'data.id']:
+            if id_key in callback_data:
+                external_id = callback_data[id_key]
+                print(f"Found external_id in field {id_key}: {external_id}")
+                break
+            elif '.' in id_key:
+                # Try nested key like "data.id"
+                parent, child = id_key.split('.', 1)
+                if parent in callback_data and isinstance(callback_data[parent], dict) and child in callback_data[parent]:
+                    external_id = callback_data[parent][child]
+                    print(f"Found external_id in nested field {id_key}: {external_id}")
+                    break
         
-        if not status and 'x-callback-status' in request.headers:
-            status = request.headers.get('x-callback-status')
-            print(f"Using status from header: {status}")
+        # Try all possible header keys for external_id
+        for header_key in ['x-callback-id', 'x-request-id', 'x-external-id']:
+            if not external_id and header_key in request.headers:
+                external_id = request.headers.get(header_key)
+                print(f"Found external_id in header {header_key}: {external_id}")
+                break
         
+        # Try all possible keys for status
+        for status_key in ['status', 'state', 'result', 'data.status']:
+            if status_key in callback_data:
+                status = callback_data[status_key]
+                print(f"Found status in field {status_key}: {status}")
+                break
+            elif '.' in status_key:
+                # Try nested key like "data.status"
+                parent, child = status_key.split('.', 1)
+                if parent in callback_data and isinstance(callback_data[parent], dict) and child in callback_data[parent]:
+                    status = callback_data[parent][child]
+                    print(f"Found status in nested field {status_key}: {status}")
+                    break
+        
+        # Try all possible header keys for status
+        for header_key in ['x-callback-status', 'x-status', 'x-state']:
+            if not status and header_key in request.headers:
+                status = request.headers.get(header_key)
+                print(f"Found status in header {header_key}: {status}")
+                break
+            
         print(f"Processing webhook: external_id={external_id}, status={status}")
         
         if not external_id:
-            error_msg = "Missing ID in callback data"
-            print(f"Webhook ERROR: {error_msg}")
-            raise HTTPException(status_code=400, detail=error_msg)
+            # Instead of raising an exception, log the error and return a success response
+            print("WARNING: Missing ID in callback data, but returning success to prevent retries")
+            response_data["warning"] = "Missing ID in callback data"
+            return response_data
         
-        # Find the corresponding request in the database
+        # Try to find the corresponding request in the database
         db_request = db.query(models.NegativaRequest).filter(
             models.NegativaRequest.external_id == external_id
         ).first()
         
         if not db_request:
-            error_msg = f"Request with external ID {external_id} not found"
-            print(f"Webhook ERROR: {error_msg}")
-            raise HTTPException(status_code=404, detail=error_msg)
+            # Instead of raising an exception, log the error and return a success response
+            print(f"WARNING: Request with external ID {external_id} not found, but returning success")
+            response_data["warning"] = f"Request with external ID {external_id} not found"
+            return response_data
         
         print(f"Found request in database: id={db_request.id}, current_status={db_request.status}")
         
@@ -579,16 +659,18 @@ async def negative_event_callback(
                 db=db
             )
         
-        response_data = {"message": "Callback received successfully", "request_id": db_request.id}
+        # Add request ID to response
+        response_data["request_id"] = db_request.id
         print(f"Webhook successful, returning: {response_data}")
         
         # Return success
         return response_data
     
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing callback: {str(e)}")
+        # Even if we have an internal error, return a success response to prevent OpenAPI from retrying
+        print(f"ERROR in webhook processing: {str(e)}")
+        response_data["warning"] = f"Internal error occurred, but accepting callback: {str(e)}"
+        return response_data
 
 # Custom function to modify OpenAPI schema generation
 def custom_openapi(app):
