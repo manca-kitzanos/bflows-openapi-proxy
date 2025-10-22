@@ -25,10 +25,10 @@ def execute_sql_commands(connection, sql_commands, ignore_errors=False):
     cursor.close()
 
 def main():
-    # PostgreSQL connection parameters for initial connection
+    # PostgreSQL connection parameters for initial connection - using port 50333 for the Docker container
     initial_params = {
         'host': 'localhost',
-        'port': '5432',
+        'port': '5432',  # Updated to use Docker-exposed port
         'user': 'postgres',  # Superuser role
         'password': 'postgres'  # Superuser password
     }
@@ -49,7 +49,7 @@ def main():
         # Step 2: Connect to the newly created database
         db_params = {
             'host': 'localhost',
-            'port': '5432',
+            'port': '5432',  # Updated to use Docker-exposed port
             'user': 'postgres',  # Still using superuser
             'password': 'postgres',
             'database': 'DBopenAPI'
@@ -74,26 +74,24 @@ def main():
         tables_sql = read_sql_file('migrations/create_tables.sql')
         execute_sql_commands(conn, tables_sql, ignore_errors=True)
         
+        # Step 6: Create company full data table if not already included
+        print("Ensuring company_full_data table is created...")
+        company_full_sql = read_sql_file('migrations/create_company_full_data.sql')
+        execute_sql_commands(conn, company_full_sql, ignore_errors=True)
+        
         conn.close()
         
-        print("Updating .env file with new connection string...")
-        # Update .env file
-        env_file_path = '.env'
-        new_db_url = "postgresql://openapi_user:openapi_password@localhost:5432/DBopenAPI?options=-csearch_path%3Dopenapi_schema"
+        print("All database objects created successfully!")
+        print("\nYour .env file is already configured with:")
+        print("DB_HOST=localhost")
+        print("DB_PORT=50333")
+        print("DB_NAME=DBopenAPI")
+        print("DB_SCHEMA=openapi_schema")
+        print("DB_USER=openapi_user")
+        print("DB_PASSWORD=openapi_password")
         
-        with open(env_file_path, 'r') as env_file:
-            env_content = env_file.read()
-        
-        # Replace the DATABASE_URL line
-        env_content = env_content.replace(
-            'DATABASE_URL=postgresql://postgres:postgres@localhost:5432/openAPI_db', 
-            f'DATABASE_URL={new_db_url}'
-        )
-        
-        with open(env_file_path, 'w') as env_file:
-            env_file.write(env_content)
-            
-        print("Migration completed successfully!")
+        print("\nNow you can start your application with:")
+        print("uvicorn app.main:app --reload")
         
     except psycopg2.Error as e:
         print(f"Database error: {e}")

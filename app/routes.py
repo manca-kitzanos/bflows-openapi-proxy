@@ -12,6 +12,30 @@ router = APIRouter(
     tags=["OpenAPI Proxy"]
 )
 
+# Custom OpenAPI function to hide webhook endpoints
+def custom_openapi(app):
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+        tags=app.openapi_tags,
+    )
+    
+    # Filter out webhook endpoints from the schema
+    paths = openapi_schema["paths"]
+    filtered_paths = {}
+    for path, path_item in paths.items():
+        if not path.startswith("/webhook"):
+            filtered_paths[path] = path_item
+    
+    openapi_schema["paths"] = filtered_paths
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
 # Load environment variables
 OPENAPI_BASE_URL_RISK = os.getenv("OPENAPI_BASE_URL_RISK")
 OPENAPI_TOKEN_RISK = os.getenv("OPENAPI_TOKEN_RISK")
