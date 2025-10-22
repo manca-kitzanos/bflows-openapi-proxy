@@ -66,10 +66,11 @@ async def get_credit_score(
         return existing_response
         
     # All other cases (update=true OR no existing record) will fetch a new record from OpenAPI
-    # So we're removing the case that would return 404 and proceeding to fetch a new record
     
     # For update=true, proceed to call the OpenAPI endpoint
     url = f"{OPENAPI_BASE_URL_RISK}/IT-creditscore-top/{identifier}"
+    status_code = 500
+    response_json = {}
     
     try:
         # Check if we're in a testing/development environment
@@ -105,43 +106,65 @@ async def get_credit_score(
             # Proceed with actual API call
             async with httpx.AsyncClient() as client:
                 try:
+                    # Prepare headers
                     headers = get_auth_headers()
-                    # Add accept header to match the curl example
                     headers["accept"] = "application/json"
                     
+                    # Log the URL and headers for debugging (omitting the auth token for security)
+                    headers_log = headers.copy()
+                    if "Authorization" in headers_log:
+                        headers_log["Authorization"] = "Bearer [REDACTED]"
+                    print(f"Making OpenAPI request to: {url}")
+                    print(f"Headers: {headers_log}")
+                    
+                    # Make the request
                     resp = await client.get(
                         url,
-                        headers=headers
+                        headers=headers,
+                        timeout=30.0  # Add a timeout to avoid hanging indefinitely
                     )
                     status_code = resp.status_code
                     
                     # Parse the JSON response regardless of status code
-                    response_json = resp.json()
+                    try:
+                        response_json = resp.json()
+                    except Exception as json_err:
+                        # Handle case where response isn't valid JSON
+                        response_json = {
+                            "error": f"Invalid JSON response: {str(json_err)}", 
+                            "raw_text": resp.text[:200]
+                        }
+                    
+                    # Log the response
+                    print(f"OpenAPI response status: {status_code}")
+                    print(f"OPENAPI_BASE_URL_RISK: {OPENAPI_BASE_URL_RISK}")
                     
                     # Handle the case where the OpenAPI endpoint returns a specific error format
                     if not resp.is_success:
+                        error_message = f"OpenAPI returned status code {status_code}"
                         # If the response contains the specific error format from OpenAPI
                         if isinstance(response_json, dict) and response_json.get('success') is False:
+                            error_message += f": {response_json.get('message')} (code: {response_json.get('error')})"
                             # We'll store this error response in the database but won't raise an exception
-                            print(f"OpenAPI returned error: {response_json.get('message')} (code: {response_json.get('error')})")
+                            print(f"OpenAPI error: {error_message}")
                         else:
-                            # For other unsuccessful status codes, raise an exception
-                            resp.raise_for_status()
+                            # For other unsuccessful status codes, log but don't raise yet
+                            print(f"HTTP error: {error_message}")
                 except httpx.HTTPError as e:
                     # For connection errors and other non-response exceptions
-                    status_code = getattr(e, "response", httpx.Response(status_code=500)).status_code
-                    response_json = {"error": str(e)}
-                    # Re-raise the exception for the client
-                    raise HTTPException(status_code=502, detail=str(e))
-                except ValueError as e:
-                    # For JSON parsing errors
-                    status_code = resp.status_code
-                    response_json = {"error": f"Invalid JSON response: {str(e)}"}
+                    status_code = getattr(e, "response", httpx.Response(status_code=502)).status_code
+                    response_json = {"error": f"Connection error: {str(e)}"}
+                    print(f"HTTP connection error: {str(e)}")
+                except Exception as e:
+                    # For other exceptions during the request
+                    status_code = 500
+                    response_json = {"error": f"Request error: {str(e)}"}
+                    print(f"General request error: {str(e)}")
     except Exception as e:
         # Handle any other exceptions
         status_code = 500
         response_json = {"error": str(e)}
-        # Don't re-raise the exception here to allow storing the error in the database
+        print(f"Outer exception: {str(e)}")
     
     # Case 3: update=true and record exists - set existing to NOT ACTIVE and create new
     if update and existing_response:
@@ -149,20 +172,8 @@ async def get_credit_score(
         existing_response.status = "NOT ACTIVE"
         db.add(existing_response)
         db.commit()
-        
-        # Create new ACTIVE record
-        new_record = models.CreditScoreResponse(
-            identifier=identifier,
-            response_json=response_json,
-            status_code=status_code,
-            status="ACTIVE"
-        )
-        db.add(new_record)
-        db.commit()
-        db.refresh(new_record)
-        return new_record
     
-    # Case 4: update=true and no record exists - create new ACTIVE record
+    # Create new ACTIVE record (either for update=true or no existing record)
     new_record = models.CreditScoreResponse(
         identifier=identifier,
         response_json=response_json,
