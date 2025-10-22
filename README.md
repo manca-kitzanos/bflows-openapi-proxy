@@ -122,6 +122,15 @@ Use the password specified in your `.env` file for `DB_ROOT_PASSWORD`.
   
 - `POST /webhook/negative-event` - Hidden webhook endpoint (not exposed in Swagger UI) for receiving callbacks from OpenAPI
 
+#### Company Full Data Endpoints
+
+- `GET /company-full/{identifier}` - Get comprehensive company data with 400+ financial details
+  - Use with `update=false` (default) to get cached data if available, or start a new request
+  - Use with `update=true` to force a new request and mark previous records as inactive
+  - Example: `GET /company-full/12345678901?update=true`
+  
+- `POST /webhook/company-full` - Hidden webhook endpoint (not exposed in Swagger UI) for receiving company data callbacks from OpenAPI
+
 ### Response Format
 
 ```json
