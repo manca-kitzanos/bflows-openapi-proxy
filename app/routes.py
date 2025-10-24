@@ -480,7 +480,7 @@ async def get_negative_event(
     - update: When true, creates a new request even if an existing one is found
     
     ## Response
-    - For COMPLETED records: Returns a NegativaFullResponse object with request and detail information
+    - For COMPLETED records: Returns the detail_json content directly from the negativa_details table
     - For PENDING records: Returns a simplified response with state, cf_piva, and message in a "data" root key
     - For new requests: Returns a simplified response with state, cf_piva, and message in a "data" root key
     
@@ -508,13 +508,18 @@ async def get_negative_event(
             models.NegativaRequest.version_status == "ACTIVE"
         ).order_by(models.NegativaRequest.created_at.desc()).first()
         
-        # If we have a completed record, return it with its details
+        # If we have a completed record, return the detail_json content from negativa_details
         if existing_request:
             # Get the details
             details = db.query(models.NegativaDetail).filter(
                 models.NegativaDetail.request_id == existing_request.id
             ).first()
             
+            # Return the detail_json content directly
+            if details and hasattr(details, 'detail_json'):
+                return details.detail_json
+            
+            # Fallback if detail_json is not available
             return {
                 "request": existing_request,
                 "detail": details
