@@ -634,28 +634,25 @@ async def get_negative_event(
             if not external_id:
                 raise HTTPException(status_code=500, detail="Invalid response from OpenAPI: missing ID")
             
+            # Determine which email to use - parameter or default from settings
+            email_to_use = email_callback or settings.DEFAULT_NOTIFICATION_EMAIL
+            print(f"Using email for notifications: {email_to_use}")
+            
             # Create the database record
+            db_request = models.NegativaRequest(
+                external_id=external_id,
+                cf_piva=cf_piva,
+                status="PENDING",
+                version_status="ACTIVE",
+                request_json=payload,  # Store the actual payload we sent
+                response_json=response_json
+            )
+            
+            # Always try to set the email_callback field
             try:
-                db_request = models.NegativaRequest(
-                    external_id=external_id,
-                    cf_piva=cf_piva,
-                    status="PENDING",
-                    version_status="ACTIVE",
-                    request_json=payload,  # Store the actual payload we sent
-                    response_json=response_json,
-                    email_callback=email_callback  # Save the email for notification
-                )
+                db_request.email_callback = email_to_use
             except Exception as e:
-                # Fallback if email_callback column doesn't exist yet
                 print(f"Warning: Could not set email_callback (column might not exist): {str(e)}")
-                db_request = models.NegativaRequest(
-                    external_id=external_id,
-                    cf_piva=cf_piva,
-                    status="PENDING",
-                    version_status="ACTIVE",
-                    request_json=payload,  # Store the actual payload we sent
-                    response_json=response_json
-                )
             
             db.add(db_request)
             db.commit()
