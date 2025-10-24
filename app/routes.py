@@ -1012,6 +1012,72 @@ async def negative_event_callback(
         response_data["warning"] = f"Internal error occurred, but accepting callback: {str(e)}"
         return response_data
 
+@router.get("/all-data")
+async def get_all_data(
+    identifier: str = Query(..., description="VAT code, tax code, or company ID to fetch all data for"),
+    update: bool = Query(
+        False, 
+        description="When true, forces a fetch from OpenAPI for all endpoints and creates new records"
+    ),
+    db: Session = Depends(database.get_db),
+    request: Request = None
+):
+    """
+    Fetch comprehensive data from all available endpoints in a single call.
+    
+    ## Description
+    This endpoint combines the results from credit-score, company-full, and negative-event endpoints
+    into a single response with three keys.
+    
+    ## Behavior
+    - Calls each endpoint (credit-score, company-full, and negative-event) with the provided identifier
+    - Returns a combined response with data from all three sources
+    
+    ## Parameters
+    - identifier: VAT code, tax code, or company ID to use for all requests
+    - update: When true, forces a fresh fetch for all endpoints
+    
+    ## Response
+    Returns a JSON object with three keys:
+    - credit_score: The response from the credit-score endpoint
+    - company_data: The response from the company-full endpoint
+    - negative_events: The response from the negative-event endpoint
+    
+    ## Example Usage
+    - Get all cached data: `GET /all-data?identifier=ABC123`
+    - Force refresh of all data: `GET /all-data?identifier=ABC123&update=true`
+    """
+    # Create a dictionary to store the combined results
+    combined_results = {}
+    
+    # Get credit score data
+    try:
+        credit_score = await get_credit_score(identifier=identifier, update=update, db=db)
+        # Convert Pydantic model to dict if needed
+        if hasattr(credit_score, "dict"):
+            combined_results["credit_score"] = credit_score.dict()
+        else:
+            combined_results["credit_score"] = credit_score
+    except Exception as e:
+        combined_results["credit_score"] = {"error": str(e)}
+    
+    # Get company full data
+    try:
+        company_data = await get_company_full_data(identifier=identifier, update=update, db=db, request=request)
+        combined_results["company_data"] = company_data
+    except Exception as e:
+        combined_results["company_data"] = {"error": str(e)}
+    
+    # Get negative event data
+    try:
+        # For negative-event, we need to use the cf_piva parameter name
+        negative_events = await get_negative_event(cf_piva=identifier, update=update, db=db, request=request)
+        combined_results["negative_events"] = negative_events
+    except Exception as e:
+        combined_results["negative_events"] = {"error": str(e)}
+    
+    return combined_results
+
 # This route will NOT be shown in Swagger docs - Callback for company full data
 @router.post("/webhook/company-full", include_in_schema=False, status_code=200)
 async def company_full_callback(
