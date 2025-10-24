@@ -31,12 +31,19 @@ def send_notification_email(recipient_email, subject, message):
     msg.attach(MIMEText(message, "plain"))
     
     try:
-        # Create SMTP session
-        server = smtplib.SMTP(settings.EMAIL_HOST, settings.EMAIL_PORT)
-        
-        # Use TLS if configured
-        if settings.EMAIL_USE_TLS:
-            server.starttls()
+        # Create SMTP session - use SSL or regular SMTP based on settings
+        if settings.EMAIL_USE_SSL:
+            # SSL connection from the beginning
+            server = smtplib.SMTP_SSL(settings.EMAIL_HOST, settings.EMAIL_PORT)
+            logger.info(f"Using SSL connection to {settings.EMAIL_HOST}:{settings.EMAIL_PORT}")
+        else:
+            # Regular SMTP connection
+            server = smtplib.SMTP(settings.EMAIL_HOST, settings.EMAIL_PORT)
+            
+            # Use TLS if configured
+            if settings.EMAIL_USE_TLS:
+                server.starttls()
+                logger.info(f"Using TLS connection to {settings.EMAIL_HOST}:{settings.EMAIL_PORT}")
         
         # Login if credentials provided
         if settings.EMAIL_HOST_USER and settings.EMAIL_HOST_PASSWORD:
