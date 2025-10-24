@@ -454,7 +454,7 @@ async def get_company_full_data(
         
         raise HTTPException(status_code=500, detail=f"Failed to create company data request: {str(e)}")
 
-@router.get("/negative-event", response_model=schemas.NegativaFullResponse)
+@router.get("/negative-event", response_model=None)  # Remove response model to allow returning arbitrary data
 async def get_negative_event(
     cf_piva: str = Query(..., description="Tax code or VAT number to check for negative events"),
     update: bool = Query(
@@ -480,10 +480,9 @@ async def get_negative_event(
     - update: When true, creates a new request even if an existing one is found
     
     ## Response
-    Returns a NegativaFullResponse object with:
-    - Request information (status, timestamps, etc.)
-    - Detail information if available (presence of negative events, etc.)
-    - If the check is still pending, only basic request info is returned
+    - For COMPLETED records: Returns a NegativaFullResponse object with request and detail information
+    - For PENDING records: Returns a simplified response with state, cf_piva, and message in a "data" root key
+    - For new requests: Returns a simplified response with state, cf_piva, and message in a "data" root key
     
     ## Example Usage
     - Get cached data: `GET /negative-event?cf_piva=ABC123`
@@ -529,11 +528,14 @@ async def get_negative_event(
             models.NegativaRequest.version_status == "ACTIVE"
         ).order_by(models.NegativaRequest.created_at.desc()).first()
         
-        # If we have a pending request, return it without details
+        # If we have a pending request, return a simplified response with standardized format
         if pending_request:
             return {
-                "request": pending_request,
-                "detail": None
+                "data": {
+                    "state": "PENDING",
+                    "cf_piva": pending_request.cf_piva,
+                    "message": "Riprova fra qualche minuto!"
+                }
             }
     
     # If we get here, we need to create a new request
@@ -628,10 +630,13 @@ async def get_negative_event(
             db.commit()
             db.refresh(db_request)
             
-            # Return the new request
+            # Return a simplified response with state and ID for the newly created record
             return {
-                "request": db_request,
-                "detail": None
+                "data": {
+                    "state": "PENDING",
+                    "cf_piva": cf_piva,
+                    "message": "Riprova fra qualche minuto!"
+                }
             }
     
     except httpx.HTTPError as e:
