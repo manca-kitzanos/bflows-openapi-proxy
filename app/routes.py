@@ -470,7 +470,7 @@ async def get_negative_event(
         False, 
         description="When true, forces a new request and marks old ones as inactive"
     ),
-    email_callback: str = Query(
+    email_callback: Optional[str] = Query(
         None,
         description="Email address to notify when data is ready. If not provided, uses the default from settings."
     ),
@@ -1067,7 +1067,7 @@ async def get_company_all_data(
         False, 
         description="When true, forces a fetch from OpenAPI for all endpoints and creates new records"
     ),
-    email_callback: str = Query(
+    email_callback: Optional[str] = Query(
         None,
         description="Email address to notify when data is ready. If not provided, uses the default from settings."
     ),
