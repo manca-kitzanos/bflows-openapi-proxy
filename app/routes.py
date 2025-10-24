@@ -49,7 +49,7 @@ def get_auth_headers_risk():
 def get_auth_headers_company():
     return {"Authorization": f"Bearer {OPENAPI_TOKEN_COMPANY}"}
 
-@router.get("/credit-score/{identifier}", response_model=schemas.CreditScoreResponse)
+@router.get("/credit-score/{identifier}", response_model=None)  # Remove response model to allow returning arbitrary data
 async def get_credit_score(
     identifier: str = Path(..., description="VAT code, tax code, or company ID of the organization to fetch credit score for"),
     update: bool = Query(
@@ -74,12 +74,8 @@ async def get_credit_score(
       - If no ACTIVE record exists: Creates a new "ACTIVE" record
     
     ## Response
-    Returns a CreditScoreResponse object with:
-    - Organization identifier
-    - Complete credit score data in response_json
-    - HTTP status code from the OpenAPI call
-    - Record status (ACTIVE/NOT ACTIVE)
-    - Timestamps for creation and updates
+    - For existing records: Returns only the "data" field from response_json with all credit score details
+    - For new/updated records: Returns the full record with all fields (id, identifier, response_json, etc.)
     
     ## Example Usage
     - Get cached data: `GET /credit-score/ABC123`
@@ -91,8 +87,11 @@ async def get_credit_score(
         models.CreditScoreResponse.status == "ACTIVE"
     ).first()
     
-    # Case 1: update=false/not set and record exists - return the existing record
+    # Case 1: update=false/not set and record exists - return only the "data" field
     if not update and existing_response:
+        # If we have a response_json with a "data" field, return just that data
+        if existing_response and existing_response.response_json and "data" in existing_response.response_json:
+            return existing_response.response_json["data"]
         return existing_response
         
     # All other cases (update=true OR no existing record) will fetch a new record from OpenAPI
