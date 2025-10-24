@@ -378,7 +378,11 @@ async def get_company_full_data(
             # Extract external ID from the response (if available)
             external_id = response_json.get('data', {}).get('id', None)
             
-        # Create the database record - simpler version to avoid issues
+        # Determine which email to use - parameter or default from settings
+        email_to_use = email_callback or settings.DEFAULT_NOTIFICATION_EMAIL
+        print(f"Using email for notifications: {email_to_use}")
+
+        # Create the database record
         db_record = models.CompanyFullData(
             identifier=identifier,
             external_id=external_id,
@@ -389,12 +393,11 @@ async def get_company_full_data(
             status_code=status_code
         )
         
-        # Only set email_callback if it's provided and the column exists
-        if email_callback:
-            try:
-                db_record.email_callback = email_callback
-            except Exception as e:
-                print(f"Warning: Could not set email_callback (column might not exist): {str(e)}")
+        # Always try to set the email_callback field
+        try:
+            db_record.email_callback = email_to_use
+        except Exception as e:
+            print(f"Warning: Could not set email_callback (column might not exist): {str(e)}")
         
         db.add(db_record)
         db.commit()
