@@ -243,9 +243,9 @@ async def get_company_full_data(
     
     ## Response
     - For COMPLETED records: Returns only the "data" field from the callback_json with company details
-      (vatCode, taxCode, companyName, etc.)
-    - For PENDING records: Returns the full record with status information
-    - For new requests: Returns a new record with PENDING status
+      (vatCode, taxCode, companyName, etc.) wrapped in a "data" root key
+    - For PENDING records: Returns a simplified response with state and ID in a "data" root key
+    - For new requests: Returns a simplified response with state and ID in a "data" root key
     
     ## Example Usage
     - Get cached data: `GET /company-full/ABC123`
@@ -291,9 +291,16 @@ async def get_company_full_data(
             models.CompanyFullData.version_status == "ACTIVE"
         ).order_by(models.CompanyFullData.created_at.desc()).first()
         
-        # If we have a pending record, return it
+        # If we have a pending record, return a simplified response with state and ID
         if pending_record:
-            return pending_record
+            # Create a simplified response with just the state and ID
+            return {
+                "data": {
+                    "state": "PENDING",
+                    "id": pending_record.external_id or str(pending_record.id),
+                    "message": "Riprova fra qualche minuto!"
+                }
+            }
     
     # If we get here, we need to create a new request
     
@@ -387,8 +394,13 @@ async def get_company_full_data(
             db.commit()
             db.refresh(db_record)
             
-            # Return the new record
-            return db_record
+            # Return a simplified response with state and ID for the newly created record
+            return {
+                "data": {
+                    "state": "PENDING",
+                    "id": external_id or str(db_record.id)
+                }
+            }
     
     except httpx.HTTPError as e:
         # Handle HTTP errors from the API
