@@ -49,7 +49,7 @@ def get_auth_headers_risk():
 def get_auth_headers_company():
     return {"Authorization": f"Bearer {OPENAPI_TOKEN_COMPANY}"}
 
-@router.get("/credit-score/{identifier}", response_model=None)  # Remove response model to allow returning arbitrary data
+@router.get("/credit-score/{identifier}")  # Completely remove response_model instead of setting to None
 async def get_credit_score(
     identifier: str = Path(..., description="VAT code, tax code, or company ID of the organization to fetch credit score for"),
     update: bool = Query(
@@ -214,7 +214,7 @@ async def get_credit_score(
     db.refresh(new_record)
     return new_record
 
-@router.get("/company-full/{identifier}", response_model=None)  # Remove response model to return arbitrary data
+@router.get("/company-full/{identifier}")  # Completely remove response_model instead of setting to None
 async def get_company_full_data(
     identifier: str = Path(..., description="VAT code or tax code of the company to fetch full data for"),
     update: bool = Query(
@@ -471,7 +471,7 @@ async def get_company_full_data(
         
         raise HTTPException(status_code=500, detail=f"Failed to create company data request: {str(e)}")
 
-@router.get("/negative-event", response_model=None)  # Remove response model to allow returning arbitrary data
+@router.get("/negative-event")  # Completely remove response_model instead of setting to None
 async def get_negative_event(
     cf_piva: str = Query(..., description="Tax code or VAT number to check for negative events"),
     update: bool = Query(
@@ -1354,10 +1354,38 @@ async def company_full_callback(
                 except Exception as e:
                     print(f"Error checking record for session_id: {str(e)}")
         
+        # If no record is found, log all active records in the database for debugging
         if not db_record:
-            print(f"WARNING: No pending company data record found for external_id={external_id}")
-            response_data["warning"] = f"No pending record found for external_id={external_id}"
-            return response_data
+            all_records = db.query(models.CompanyFullData).filter(
+                models.CompanyFullData.version_status == "ACTIVE"
+            ).all()
+            
+            print(f"DEBUG: Found {len(all_records)} ACTIVE records in total")
+            for record in all_records:
+                print(f"DEBUG: Record id={record.id}, identifier={record.identifier}, status={record.status}")
+            
+            # If there's any data available, create a new record with it
+            if vat_code or tax_code:
+                identifier = vat_code or tax_code
+                
+                print(f"Creating new record for identifier={identifier} since no pending record was found")
+                db_record = models.CompanyFullData(
+                    identifier=identifier,
+                    external_id=external_id,
+                    status="COMPLETED",
+                    version_status="ACTIVE",
+                    callback_json=callback_data
+                )
+                
+                db.add(db_record)
+                db.commit()
+                db.refresh(db_record)
+                
+                print(f"Successfully created new record with id={db_record.id}")
+            else:
+                print(f"WARNING: No pending company data record found for external_id={external_id}")
+                response_data["warning"] = f"No pending record found for external_id={external_id}"
+                return response_data
         
         # Update the record with the callback data
         db_record.callback_json = callback_data
