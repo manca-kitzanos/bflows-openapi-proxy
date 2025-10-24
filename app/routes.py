@@ -277,8 +277,11 @@ async def get_company_full_data(
             models.CompanyFullData.version_status == "ACTIVE"
         ).order_by(models.CompanyFullData.created_at.desc()).first()
         
-        # If we have a completed record, return it
+        # If we have a completed record, return only the data field from callback_json
         if existing_record:
+            # Extract the data field from callback_json
+            if existing_record and existing_record.callback_json and "data" in existing_record.callback_json:
+                return existing_record.callback_json["data"]
             return existing_record
     
     # Next, check for PENDING requests (unless update=true)
