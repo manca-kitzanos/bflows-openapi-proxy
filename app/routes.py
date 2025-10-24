@@ -398,7 +398,8 @@ async def get_company_full_data(
             return {
                 "data": {
                     "state": "PENDING",
-                    "id": external_id or str(db_record.id)
+                    "id": external_id or str(db_record.id),
+                    "message": "Riprova fra qualche minuto!"
                 }
             }
     
