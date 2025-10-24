@@ -1116,15 +1116,30 @@ async def get_company_all_data(
     
     # Get company full data
     try:
-        company_data = await get_company_full_data(identifier=identifier, update=update, db=db, request=request)
+        # Pass the email_callback as a string, not a Query object
+        email_callback_str = email_callback if email_callback is None else str(email_callback)
+        company_data = await get_company_full_data(
+            identifier=identifier, 
+            update=update, 
+            email_callback=email_callback_str,
+            db=db, 
+            request=request
+        )
         combined_results["company_data"] = company_data
     except Exception as e:
         combined_results["company_data"] = {"error": str(e)}
     
     # Get negative event data
     try:
-        # For negative-event, we need to use the cf_piva parameter name
-        negative_events = await get_negative_event(cf_piva=identifier, update=update, db=db, request=request)
+        # For negative-event, we need to use the cf_piva parameter name and pass email as string
+        email_callback_str = email_callback if email_callback is None else str(email_callback)
+        negative_events = await get_negative_event(
+            cf_piva=identifier, 
+            update=update, 
+            email_callback=email_callback_str,
+            db=db, 
+            request=request
+        )
         combined_results["negative_events"] = negative_events
     except Exception as e:
         combined_results["negative_events"] = {"error": str(e)}
