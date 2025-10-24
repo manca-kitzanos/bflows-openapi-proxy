@@ -1011,8 +1011,8 @@ async def negative_event_callback(
         response_data["warning"] = f"Internal error occurred, but accepting callback: {str(e)}"
         return response_data
 
-@router.get("/all-data")
-async def get_all_data(
+@router.get("/company-all-data")
+async def get_company_all_data(
     identifier: str = Query(..., description="VAT code, tax code, or company ID to fetch all data for"),
     update: bool = Query(
         False, 
@@ -1043,8 +1043,8 @@ async def get_all_data(
     - negative_events: The response from the negative-event endpoint
     
     ## Example Usage
-    - Get all cached data: `GET /all-data?identifier=ABC123`
-    - Force refresh of all data: `GET /all-data?identifier=ABC123&update=true`
+    - Get all cached data: `GET /company-all-data?identifier=ABC123`
+    - Force refresh of all data: `GET /company-all-data?identifier=ABC123&update=true`
     """
     # Create a dictionary to store the combined results
     combined_results = {}
