@@ -382,7 +382,8 @@ async def get_company_full_data(
             # Extract external ID from the response (if available)
             external_id = response_json.get('data', {}).get('id', None)
             
-            # Create the database record
+        # Create the database record
+        try:
             db_record = models.CompanyFullData(
                 identifier=identifier,
                 external_id=external_id,
@@ -391,6 +392,18 @@ async def get_company_full_data(
                 request_json=payload,
                 response_json=response_json,
                 email_callback=email_callback,  # Save the email for notification
+                status_code=status_code
+            )
+        except Exception as e:
+            # Fallback if email_callback column doesn't exist yet
+            print(f"Warning: Could not set email_callback (column might not exist): {str(e)}")
+            db_record = models.CompanyFullData(
+                identifier=identifier,
+                external_id=external_id,
+                status="PENDING",
+                version_status="ACTIVE",
+                request_json=payload,
+                response_json=response_json,
                 status_code=status_code
             )
             
@@ -630,15 +643,27 @@ async def get_negative_event(
                 raise HTTPException(status_code=500, detail="Invalid response from OpenAPI: missing ID")
             
             # Create the database record
-            db_request = models.NegativaRequest(
-                external_id=external_id,
-                cf_piva=cf_piva,
-                status="PENDING",
-                version_status="ACTIVE",
-                request_json=payload,  # Store the actual payload we sent
-                response_json=response_json,
-                email_callback=email_callback  # Save the email for notification
-            )
+            try:
+                db_request = models.NegativaRequest(
+                    external_id=external_id,
+                    cf_piva=cf_piva,
+                    status="PENDING",
+                    version_status="ACTIVE",
+                    request_json=payload,  # Store the actual payload we sent
+                    response_json=response_json,
+                    email_callback=email_callback  # Save the email for notification
+                )
+            except Exception as e:
+                # Fallback if email_callback column doesn't exist yet
+                print(f"Warning: Could not set email_callback (column might not exist): {str(e)}")
+                db_request = models.NegativaRequest(
+                    external_id=external_id,
+                    cf_piva=cf_piva,
+                    status="PENDING",
+                    version_status="ACTIVE",
+                    request_json=payload,  # Store the actual payload we sent
+                    response_json=response_json
+                )
             
             db.add(db_request)
             db.commit()
@@ -1009,8 +1034,8 @@ async def negative_event_callback(
         background_tasks.add_task(fetch_negative_detail, db_request.id, external_id, db)
         
         # Send email notification if email_callback is set
-        if db_request.email_callback:
-            try:
+        try:
+            if hasattr(db_request, 'email_callback') and db_request.email_callback:
                 # Prepare notification data
                 notification_data = {
                     "cf_piva": db_request.cf_piva,
@@ -1030,8 +1055,8 @@ async def negative_event_callback(
                     notification_data
                 )
                 print(f"Email notification sent to {db_request.email_callback}")
-            except Exception as e:
-                print(f"Failed to send email notification: {str(e)}")
+        except Exception as e:
+            print(f"Failed to send email notification: {str(e)}")
         
         # Add request ID to response
         response_data["request_id"] = db_request.id
@@ -1323,8 +1348,8 @@ async def company_full_callback(
         db.refresh(db_record)
         
         # Send email notification if email_callback is set
-        if db_record.email_callback:
-            try:
+        try:
+            if hasattr(db_record, 'email_callback') and db_record.email_callback:
                 # Get identifier from the record
                 identifier = db_record.identifier or external_id or "Unknown"
                 
@@ -1352,8 +1377,8 @@ async def company_full_callback(
                     notification_data
                 )
                 print(f"Email notification sent to {db_record.email_callback}")
-            except Exception as e:
-                print(f"Failed to send email notification: {str(e)}")
+        except Exception as e:
+            print(f"Failed to send email notification: {str(e)}")
         
         response_data["company_id"] = external_id
         response_data["request_id"] = db_record.id

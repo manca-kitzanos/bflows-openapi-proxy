@@ -60,6 +60,15 @@ PGPASSWORD="$DB_ROOT_PASSWORD" psql -h "$DB_HOST" -U "$DB_ROOT_USER" -d "$DB_NAM
 PGPASSWORD="$DB_ROOT_PASSWORD" psql -h "$DB_HOST" -U "$DB_ROOT_USER" -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA $DB_SCHEMA TO $DB_USER;"
 PGPASSWORD="$DB_ROOT_PASSWORD" psql -h "$DB_HOST" -U "$DB_ROOT_USER" -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA $DB_SCHEMA TO $DB_USER;"
 
+# Run table creation migrations
+echo >&2 "Applying table creation migrations..."
+PGPASSWORD="$DB_ROOT_PASSWORD" psql -h "$DB_HOST" -U "$DB_ROOT_USER" -d "$DB_NAME" -f /app/migrations/create_tables.sql
+PGPASSWORD="$DB_ROOT_PASSWORD" psql -h "$DB_HOST" -U "$DB_ROOT_USER" -d "$DB_NAME" -f /app/migrations/create_company_full_data.sql
+
+# Run additional migrations
+echo >&2 "Applying additional migrations..."
+PGPASSWORD="$DB_ROOT_PASSWORD" psql -h "$DB_HOST" -U "$DB_ROOT_USER" -d "$DB_NAME" -f /app/migrations/add_email_callback_columns.sql
+
 echo >&2 "Database initialization complete. Starting application..."
 
 # Set additional Python environment variables for better error reporting
