@@ -1,6 +1,6 @@
 # Bflows OpenAPI Proxy
 
-A FastAPI proxy service for OpenAPI with database caching and versioning support.
+A FastAPI proxy service for OpenAPI with database caching, versioning support, and email notifications.
 
 ## Features
 
@@ -8,9 +8,11 @@ A FastAPI proxy service for OpenAPI with database caching and versioning support
 - Stores responses in a PostgreSQL database for caching and versioning
 - Supports versioning of responses with ACTIVE/NOT ACTIVE status
 - Supports both fresh data fetching and cached data retrieval
-- Email notifications when asynchronous data is ready
+- Email notifications when asynchronous data becomes available via webhooks
 - Proper error handling for OpenAPI responses
+- Unified combined endpoint for fetching data from all available sources
 - Timezone support for all timestamps
+- Support for both TLS and SSL email connections
 
 ## Docker Setup
 
@@ -84,19 +86,36 @@ The application supports email notifications for asynchronous data requests. Con
 EMAIL_HOST=smtp.gmail.com
 EMAIL_PORT=587
 EMAIL_USE_TLS=True
+EMAIL_USE_SSL=False
 EMAIL_HOST_USER=your_email@gmail.com
 EMAIL_HOST_PASSWORD=your_app_password
 DEFAULT_FROM_EMAIL=your_email@gmail.com
 DEFAULT_NOTIFICATION_EMAIL=default@example.com
 ```
 
-- `EMAIL_HOST`: SMTP server address
-- `EMAIL_PORT`: SMTP server port (typically 587 for TLS)
-- `EMAIL_USE_TLS`: Whether to use TLS for secure connection
+- `EMAIL_HOST`: SMTP server address (e.g., smtp.gmail.com)
+- `EMAIL_PORT`: SMTP server port (587 for TLS, 465 for SSL)
+- `EMAIL_USE_TLS`: Set to "True" to use TLS for secure connection
+- `EMAIL_USE_SSL`: Set to "True" to use SSL for secure connection (alternative to TLS)
 - `EMAIL_HOST_USER`: Your email address
 - `EMAIL_HOST_PASSWORD`: Your email password or app-specific password
 - `DEFAULT_FROM_EMAIL`: Email address to use in the From field
 - `DEFAULT_NOTIFICATION_EMAIL`: Default email to send notifications to when not specified in the API call
+
+**Note**: For Gmail, you'll need to create an "App Password" if you have 2FA enabled. Standard password authentication won't work.
+
+### Database Migrations
+
+When running with Docker, all migrations are automatically applied during container startup via the `docker-entrypoint.sh` script. If you need to run migrations manually:
+
+```bash
+# Inside Docker container
+python migrations/run_migrations.py
+
+# Or to run a specific migration
+psql -U postgres -d DBopenAPI -f migrations/create_tables.sql
+psql -U postgres -d DBopenAPI -f migrations/add_email_callback_columns.sql
+```
 
 ### Running with Docker Compose
 
@@ -186,7 +205,25 @@ Use the password specified in your `.env` file for `DB_ROOT_PASSWORD`.
   }
   ```
 
+### Email Notification Feature
+
+For asynchronous endpoints (company-full and negative-event), you can receive an email notification when data becomes available:
+
+1. Add the `email_callback` parameter to your request with your email address:
+   ```
+   GET /company-full/12345678901?email_callback=your_email@example.com
+   ```
+
+2. If no email is provided, the system will use the `DEFAULT_NOTIFICATION_EMAIL` from settings.
+
+3. When the webhook callback is received from OpenAPI, the system will:
+   - Update the record in the database
+   - Send an email notification to the stored email address
+   - Include relevant data (like company name, tax code, etc.) in the email
+
 ### Response Format
+
+Example response format for individual endpoints:
 
 ```json
 {
@@ -206,14 +243,41 @@ For local development without Docker:
 
 1. Install PostgreSQL 16
 2. Create the database, schema, and user as defined in your `.env` file
-3. Install Python dependencies:
+3. Run the initial migrations:
+   ```bash
+   psql -U postgres -d DBopenAPI -f migrations/create_tables.sql
+   psql -U postgres -d DBopenAPI -f migrations/add_email_callback_columns.sql
+   ```
+4. Install Python dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+5. Run the application:
+   ```bash
+   uvicorn app.main:app --reload
+   ```
 
-```bash
-pip install -r requirements.txt
-```
+## Troubleshooting
 
-4. Run the application:
+### Email Notifications Not Working
 
-```bash
-uvicorn app.main:app --reload
-```
+1. Check your SMTP settings in the `.env` file
+2. For Gmail, ensure you're using an App Password if you have 2FA enabled
+3. Verify the correct port is being used (587 for TLS, 465 for SSL)
+4. Check the application logs for SMTP connection errors
+
+### Database Connection Issues
+
+1. Verify PostgreSQL is running and accepting connections
+2. Check the database credentials in `.env` match your PostgreSQL setup
+3. Ensure the database and schema exist as specified in your configuration
+
+### Missing email_callback Columns
+
+If you're seeing errors about missing columns:
+
+1. Run the email_callback column migration:
+   ```bash
+   psql -U postgres -d DBopenAPI -f migrations/add_email_callback_columns.sql
+   ```
+2. Restart the application to apply the changes
