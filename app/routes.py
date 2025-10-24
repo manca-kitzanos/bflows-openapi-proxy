@@ -382,43 +382,36 @@ async def get_company_full_data(
             # Extract external ID from the response (if available)
             external_id = response_json.get('data', {}).get('id', None)
             
-        # Create the database record
-        try:
-            db_record = models.CompanyFullData(
-                identifier=identifier,
-                external_id=external_id,
-                status="PENDING",
-                version_status="ACTIVE",
-                request_json=payload,
-                response_json=response_json,
-                email_callback=email_callback,  # Save the email for notification
-                status_code=status_code
-            )
-        except Exception as e:
-            # Fallback if email_callback column doesn't exist yet
-            print(f"Warning: Could not set email_callback (column might not exist): {str(e)}")
-            db_record = models.CompanyFullData(
-                identifier=identifier,
-                external_id=external_id,
-                status="PENDING",
-                version_status="ACTIVE",
-                request_json=payload,
-                response_json=response_json,
-                status_code=status_code
-            )
-            
-            db.add(db_record)
-            db.commit()
-            db.refresh(db_record)
-            
-            # Return a simplified response with state and ID for the newly created record
-            return {
-                "data": {
-                    "state": "PENDING",
-                    "id": external_id or str(db_record.id),
-                    "message": "Riprova fra qualche minuto!"
-                }
+        # Create the database record - simpler version to avoid issues
+        db_record = models.CompanyFullData(
+            identifier=identifier,
+            external_id=external_id,
+            status="PENDING",
+            version_status="ACTIVE",
+            request_json=payload,
+            response_json=response_json,
+            status_code=status_code
+        )
+        
+        # Only set email_callback if it's provided and the column exists
+        if email_callback:
+            try:
+                db_record.email_callback = email_callback
+            except Exception as e:
+                print(f"Warning: Could not set email_callback (column might not exist): {str(e)}")
+        
+        db.add(db_record)
+        db.commit()
+        db.refresh(db_record)
+        
+        # Return a simplified response with state and ID for the newly created record
+        return {
+            "data": {
+                "state": "PENDING",
+                "id": external_id or str(db_record.id),
+                "message": "Riprova fra qualche minuto!"
             }
+        }
     
     except httpx.HTTPError as e:
         # Handle HTTP errors from the API
