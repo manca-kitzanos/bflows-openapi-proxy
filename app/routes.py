@@ -214,7 +214,7 @@ async def get_credit_score(
     db.refresh(new_record)
     return new_record
 
-@router.get("/company-full/{identifier}")  # Completely remove response_model instead of setting to None
+@router.get("/company-full/{identifier}", response_model=None)  # Remove response model to allow returning arbitrary data
 async def get_company_full_data(
     identifier: str = Path(..., description="VAT code or tax code of the company to fetch full data for"),
     update: bool = Query(
@@ -278,12 +278,8 @@ async def get_company_full_data(
             models.CompanyFullData.version_status == "ACTIVE"
         ).order_by(models.CompanyFullData.created_at.desc()).first()
         
-        # If we have a completed record, return the data field from callback_json wrapped with "data" as root key
+        # If we have a completed record, return it
         if existing_record:
-            # Extract the data field from callback_json
-            if existing_record and existing_record.callback_json and "data" in existing_record.callback_json:
-                # Wrap the content in a {"data": ...} structure to ensure "data" is the root key
-                return {"data": existing_record.callback_json["data"]}
             return existing_record
     
     # Next, check for PENDING requests (unless update=true)
