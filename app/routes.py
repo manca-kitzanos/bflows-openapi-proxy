@@ -215,7 +215,7 @@ async def get_credit_score(
     db.refresh(new_record)
     return new_record
 
-@router.get("/company-full/{identifier}", response_model=schemas.CompanyFullDataResponse)
+@router.get("/company-full/{identifier}", response_model=None)  # Remove response model to return arbitrary data
 async def get_company_full_data(
     identifier: str = Path(..., description="VAT code or tax code of the company to fetch full data for"),
     update: bool = Query(
@@ -242,12 +242,10 @@ async def get_company_full_data(
       - Creates a new request to OpenAPI and returns PENDING status
     
     ## Response
-    Returns a CompanyFullDataResponse object with:
-    - Company identifier (VAT or tax code)
-    - Request and response data in JSON format
-    - Status of the request (PENDING, COMPLETED, ERROR)
-    - Record status (ACTIVE/NOT ACTIVE for versioning)
-    - Timestamps for creation and updates
+    - For COMPLETED records: Returns only the "data" field from the callback_json with company details
+      (vatCode, taxCode, companyName, etc.)
+    - For PENDING records: Returns the full record with status information
+    - For new requests: Returns a new record with PENDING status
     
     ## Example Usage
     - Get cached data: `GET /company-full/ABC123`
