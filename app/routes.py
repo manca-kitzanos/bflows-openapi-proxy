@@ -1287,26 +1287,50 @@ async def company_full_callback(
         db_record = None
         identifier_to_match = vat_code or tax_code
         
-        if identifier_to_match:
-            db_record = db.query(models.CompanyFullData).filter(
-                models.CompanyFullData.identifier == identifier_to_match,
-                models.CompanyFullData.status == "PENDING",
-                models.CompanyFullData.version_status == "ACTIVE"
-            ).order_by(models.CompanyFullData.created_at.desc()).first()
-            
-            if db_record:
-                print(f"Found record by identifier match: {identifier_to_match}")
+        # Debug logging
+        print(f"Looking for record with identifier={identifier_to_match}, external_id={external_id}")
         
-        # If not found by identifier, try by external_id 
-        if not db_record and external_id:
-            db_record = db.query(models.CompanyFullData).filter(
-                models.CompanyFullData.external_id == external_id,
+        # First, try a more lenient search to find ANY pending record
+        if not db_record:
+            pending_records = db.query(models.CompanyFullData).filter(
                 models.CompanyFullData.status == "PENDING",
                 models.CompanyFullData.version_status == "ACTIVE"
-            ).order_by(models.CompanyFullData.created_at.desc()).first()
+            ).order_by(models.CompanyFullData.created_at.desc()).all()
             
-            if db_record:
-                print(f"Found record by external_id: {external_id}")
+            print(f"Found {len(pending_records)} pending records")
+            
+            # Try to match by identifier exactly
+            if identifier_to_match:
+                db_record = db.query(models.CompanyFullData).filter(
+                    models.CompanyFullData.identifier == identifier_to_match,
+                    models.CompanyFullData.version_status == "ACTIVE"
+                ).order_by(models.CompanyFullData.created_at.desc()).first()
+                
+                if db_record:
+                    print(f"Found record by identifier match: {identifier_to_match}")
+            
+            # If not found by identifier, try by external_id 
+            if not db_record and external_id:
+                db_record = db.query(models.CompanyFullData).filter(
+                    models.CompanyFullData.external_id == external_id,
+                    models.CompanyFullData.version_status == "ACTIVE"
+                ).order_by(models.CompanyFullData.created_at.desc()).first()
+                
+                if db_record:
+                    print(f"Found record by external_id: {external_id}")
+                    
+            # If still not found, try a fuzzy match on identifier
+            if not db_record and identifier_to_match:
+                for record in pending_records:
+                    if record.identifier and identifier_to_match in record.identifier:
+                        db_record = record
+                        print(f"Found record by fuzzy identifier match: {record.identifier} contains {identifier_to_match}")
+                        break
+            
+            # If still not found, just use the most recent pending record
+            if not db_record and pending_records:
+                db_record = pending_records[0]
+                print(f"No exact match found, using most recent pending record with id={db_record.id}")
         
         # If still not found, try by session_id
         if not db_record and session_id:
