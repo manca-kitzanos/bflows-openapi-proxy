@@ -8,6 +8,7 @@ A FastAPI proxy service for OpenAPI with database caching and versioning support
 - Stores responses in a PostgreSQL database for caching and versioning
 - Supports versioning of responses with ACTIVE/NOT ACTIVE status
 - Supports both fresh data fetching and cached data retrieval
+- Email notifications when asynchronous data is ready
 - Proper error handling for OpenAPI responses
 - Timezone support for all timestamps
 
@@ -32,6 +33,8 @@ docker network create --subnet=172.25.0.0/16 public
 This allows the application to be accessible via a reverse proxy at `https://openapi-proxy.bflows.ai`.
 
 ### Environment Configuration
+
+#### General Configuration
 
 All configuration is done through the `.env` file. The repository includes two example files:
 
@@ -71,6 +74,29 @@ DB_NAME=DBopenAPI
 ```
 
 Modify the values as needed for your environment. Note that `DB_HOST` is automatically set to the fixed IP of the PostgreSQL container (172.25.0.101) in the Docker Compose configuration.
+
+#### Email Configuration
+
+The application supports email notifications for asynchronous data requests. Configure the following parameters in your `.env` file:
+
+```env
+# Email settings
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=your_email@gmail.com
+EMAIL_HOST_PASSWORD=your_app_password
+DEFAULT_FROM_EMAIL=your_email@gmail.com
+DEFAULT_NOTIFICATION_EMAIL=default@example.com
+```
+
+- `EMAIL_HOST`: SMTP server address
+- `EMAIL_PORT`: SMTP server port (typically 587 for TLS)
+- `EMAIL_USE_TLS`: Whether to use TLS for secure connection
+- `EMAIL_HOST_USER`: Your email address
+- `EMAIL_HOST_PASSWORD`: Your email password or app-specific password
+- `DEFAULT_FROM_EMAIL`: Email address to use in the From field
+- `DEFAULT_NOTIFICATION_EMAIL`: Default email to send notifications to when not specified in the API call
 
 ### Running with Docker Compose
 
@@ -112,13 +138,20 @@ Use the password specified in your `.env` file for `DB_ROOT_PASSWORD`.
 
 - `GET /credit-score/{identifier}?update=false` - Get cached data for an identifier
 - `GET /credit-score/{identifier}?update=true` - Force refresh data for an identifier
+- Parameters:
+  - `identifier`: VAT code, tax code, or company ID (required)
+  - `update`: When true, forces a fresh fetch from OpenAPI (optional, default: false)
 
 #### Negative Events Endpoints
 
 - `GET /negative-event?cf_piva=TAXCODE123456` - Unified endpoint for negative event checks
   - Use with `update=false` (default) to get cached data or create new request if none exists
   - Use with `update=true` to force a new request and mark previous records as inactive
-  - Example: `GET /negative-event?cf_piva=ABC123&update=true`
+  - Example: `GET /negative-event?cf_piva=ABC123&update=true&email_callback=user@example.com`
+- Parameters:
+  - `cf_piva`: Tax code or VAT number to check (required)
+  - `update`: When true, forces a new request (optional, default: false)
+  - `email_callback`: Email address to notify when data is ready (optional)
   
 - `POST /webhook/negative-event` - Hidden webhook endpoint (not exposed in Swagger UI) for receiving callbacks from OpenAPI
 
@@ -127,9 +160,31 @@ Use the password specified in your `.env` file for `DB_ROOT_PASSWORD`.
 - `GET /company-full/{identifier}` - Get comprehensive company data with 400+ financial details
   - Use with `update=false` (default) to get cached data if available, or start a new request
   - Use with `update=true` to force a new request and mark previous records as inactive
-  - Example: `GET /company-full/12345678901?update=true`
+  - Example: `GET /company-full/12345678901?update=true&email_callback=user@example.com`
+- Parameters:
+  - `identifier`: VAT code or tax code of the company (required)
+  - `update`: When true, forces a new request (optional, default: false)
+  - `email_callback`: Email address to notify when data is ready (optional)
   
 - `POST /webhook/company-full` - Hidden webhook endpoint (not exposed in Swagger UI) for receiving company data callbacks from OpenAPI
+
+#### Combined Data Endpoint
+
+- `GET /company-all-data` - Fetch comprehensive data from all available endpoints in a single call
+  - Calls credit-score, company-full, and negative-event endpoints and combines results
+  - Example: `GET /company-all-data?identifier=12345678901&update=true&email_callback=user@example.com`
+- Parameters:
+  - `identifier`: VAT code, tax code, or company ID (required)
+  - `update`: When true, forces a fresh fetch for all endpoints (optional, default: false)
+  - `email_callback`: Email address to notify when asynchronous data is ready (optional)
+- Response format:
+  ```json
+  {
+    "credit_score": { /* data from credit-score endpoint */ },
+    "company_data": { /* data from company-full endpoint */ },
+    "negative_events": { /* data from negative-event endpoint */ }
+  }
+  ```
 
 ### Response Format
 

@@ -31,6 +31,7 @@ class CompanyFullData(Base):
     request_json = Column(JSON)  # Original request data
     response_json = Column(JSON)  # Response from initial request
     callback_json = Column(JSON, nullable=True)  # Complete callback data (including detailed information)
+    email_callback = Column(String, nullable=True)  # Email to send notification to when callback is received
     status_code = Column(Integer)
     created_at = Column(DateTime(timezone=True), server_default=timezone_now)
     updated_at = Column(DateTime(timezone=True), onupdate=timezone_now)
@@ -46,6 +47,7 @@ class NegativaRequest(Base):
     request_json = Column(JSON)  # Original request data
     response_json = Column(JSON)  # Response from initial request
     callback_json = Column(JSON, nullable=True)  # Data received from callback
+    email_callback = Column(String, nullable=True)  # Email to send notification to when callback is received
     created_at = Column(DateTime(timezone=True), server_default=timezone_now)
     updated_at = Column(DateTime(timezone=True), onupdate=timezone_now)
     

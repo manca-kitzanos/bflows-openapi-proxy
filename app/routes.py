@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, BackgroundTasks, Request, Body
 from sqlalchemy.orm import Session
-from . import database, models, schemas
+from . import database, models, schemas, email_utils, settings
 import httpx
 import os
 import json
@@ -221,6 +221,10 @@ async def get_company_full_data(
         False, 
         description="When true, forces a fetch from OpenAPI and creates a new record; when false (default), returns existing record or creates a new request"
     ),
+    email_callback: str = Query(
+        None,
+        description="Email address to notify when data is ready. If not provided, uses the default from settings."
+    ),
     db: Session = Depends(database.get_db),
     request: Request = None
 ):
@@ -386,6 +390,7 @@ async def get_company_full_data(
                 version_status="ACTIVE",
                 request_json=payload,
                 response_json=response_json,
+                email_callback=email_callback,  # Save the email for notification
                 status_code=status_code
             )
             
@@ -459,6 +464,10 @@ async def get_negative_event(
     update: bool = Query(
         False, 
         description="When true, forces a new request and marks old ones as inactive"
+    ),
+    email_callback: str = Query(
+        None,
+        description="Email address to notify when data is ready. If not provided, uses the default from settings."
     ),
     db: Session = Depends(database.get_db),
     request: Request = None
@@ -627,7 +636,8 @@ async def get_negative_event(
                 status="PENDING",
                 version_status="ACTIVE",
                 request_json=payload,  # Store the actual payload we sent
-                response_json=response_json
+                response_json=response_json,
+                email_callback=email_callback  # Save the email for notification
             )
             
             db.add(db_request)
@@ -998,6 +1008,31 @@ async def negative_event_callback(
         # Launch background task to fetch details
         background_tasks.add_task(fetch_negative_detail, db_request.id, external_id, db)
         
+        # Send email notification if email_callback is set
+        if db_request.email_callback:
+            try:
+                # Prepare notification data
+                notification_data = {
+                    "cf_piva": db_request.cf_piva,
+                    "status": db_request.status,
+                    "id": external_id
+                }
+                
+                # Include any additional data available in callback data
+                if 'data_inner_esito' in callback_data:
+                    notification_data["result"] = callback_data['data_inner_esito']
+                
+                # Send the notification
+                email_utils.send_callback_notification(
+                    db_request.email_callback,
+                    "negative-event",
+                    db_request.cf_piva,
+                    notification_data
+                )
+                print(f"Email notification sent to {db_request.email_callback}")
+            except Exception as e:
+                print(f"Failed to send email notification: {str(e)}")
+        
         # Add request ID to response
         response_data["request_id"] = db_request.id
         print(f"Webhook successful, returning: {response_data}")
@@ -1018,6 +1053,10 @@ async def get_company_all_data(
         False, 
         description="When true, forces a fetch from OpenAPI for all endpoints and creates new records"
     ),
+    email_callback: str = Query(
+        None,
+        description="Email address to notify when data is ready. If not provided, uses the default from settings."
+    ),
     db: Session = Depends(database.get_db),
     request: Request = None
 ):
@@ -1035,6 +1074,7 @@ async def get_company_all_data(
     ## Parameters
     - identifier: VAT code, tax code, or company ID to use for all requests
     - update: When true, forces a fresh fetch for all endpoints
+    - email_callback: Optional email address to receive notifications when asynchronous data is ready
     
     ## Response
     Returns a JSON object with three keys:
@@ -1281,6 +1321,39 @@ async def company_full_callback(
         db.add(db_record)
         db.commit()
         db.refresh(db_record)
+        
+        # Send email notification if email_callback is set
+        if db_record.email_callback:
+            try:
+                # Get identifier from the record
+                identifier = db_record.identifier or external_id or "Unknown"
+                
+                # Extract some useful data for the notification
+                notification_data = {
+                    "identifier": identifier,
+                    "status": status
+                }
+                
+                # Include some company details in the notification if available
+                if 'data' in callback_data and 'companyDetails' in callback_data['data']:
+                    company_details = callback_data['data']['companyDetails']
+                    if 'companyName' in company_details:
+                        notification_data["companyName"] = company_details['companyName']
+                    if 'vatCode' in company_details:
+                        notification_data["vatCode"] = company_details['vatCode']
+                    if 'taxCode' in company_details:
+                        notification_data["taxCode"] = company_details['taxCode']
+                
+                # Send the notification
+                email_utils.send_callback_notification(
+                    db_record.email_callback,
+                    "company-full",
+                    identifier,
+                    notification_data
+                )
+                print(f"Email notification sent to {db_record.email_callback}")
+            except Exception as e:
+                print(f"Failed to send email notification: {str(e)}")
         
         response_data["company_id"] = external_id
         response_data["request_id"] = db_record.id
